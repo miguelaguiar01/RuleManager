@@ -64,7 +64,10 @@ class RuleManager:
         if not rule:
             return None
         
-        current = rule["filters"]
+        if "filters" not in rule or not rule["filters"]:
+            return None
+        
+        current = rule["filters"][0]
         for index in self.current_path:
             if "conditions" in current and index < len(current["conditions"]):
                 current = current["conditions"][index]
@@ -79,10 +82,10 @@ class RuleManager:
         
         self.rules[swift_code] = {
             "DEPENDENCIES": [],
-            "filters": {
+            "filters": [{
                 "logic": "or",
                 "conditions": []
-            }
+            }]
         }
         self.current_swift_code = swift_code
         self.current_path = []
@@ -285,8 +288,9 @@ class RuleManager:
                 dep_branch.add(f"[green]{dep}[/green]")
         
         # Filters
-        filters_branch = tree.add("[yellow]FILTERS[/yellow]")
-        self._build_filter_tree(filters_branch, rule["filters"], [])
+        if rule["filters"]:
+            filters_branch = tree.add("[yellow]FILTERS[/yellow]")
+            self._build_filter_tree(filters_branch, rule["filters"][0], [])
         
         # Show current position
         path_str = " → ".join([f"[{i}]" for i in self.current_path]) if self.current_path else "ROOT"
@@ -384,21 +388,16 @@ class RuleManager:
         return errors
     
     def _check_potential_overlap(self, code1: str, code2: str) -> bool:
-        """
-        Check if two Swift code rules could potentially match the same corporate action.
-        This works by extracting all logical paths through OR gates and comparing them.
-        
-        A path is one possible way the rule can evaluate to true.
-        Two rules overlap if ANY path from rule1 could match the same data as ANY path from rule2.
-        """
+
         rule1 = self.rules[code1]
         rule2 = self.rules[code2]
         
-        # Extract all possible paths through the OR logic
-        paths1 = self._extract_or_paths(rule1["filters"])
-        paths2 = self._extract_or_paths(rule2["filters"])
+        if not rule1.get("filters") or not rule2.get("filters"):
+            return False
+
+        paths1 = self._extract_or_paths(rule1["filters"][0])
+        paths2 = self._extract_or_paths(rule2["filters"][0])
         
-        # Compare every path from rule1 against every path from rule2
         for path1 in paths1:
             for path2 in paths2:
                 if self._paths_can_overlap(path1, path2):
@@ -407,19 +406,7 @@ class RuleManager:
         return False
 
     def _extract_or_paths(self, filters: Dict) -> List[List[Dict]]:
-        """
-        Extract all possible logical paths through a filter structure.
-        Each path is a list of conditions that must ALL be true (AND logic).
-        The paths themselves represent OR logic (any one path can be true).
-        
-        Example:
-        OR:
-        - AND: [cond1, cond2]
-        - cond3
-        - AND: [cond4, cond5]
-        
-        Returns: [[cond1, cond2], [cond3], [cond4, cond5]]
-        """
+
         if "conditions" not in filters:
             return [[]]
         
@@ -849,10 +836,10 @@ def main_menu(manager: RuleManager):
             else:
                 manager.rules[swift_code] = {
                     "DEPENDENCIES": [],
-                    "filters": {
+                    "filters": [{
                         "logic": logic.lower(),
                         "conditions": []
-                    }
+                    }]
                 }
                 manager.current_swift_code = swift_code
                 manager.current_path = []
