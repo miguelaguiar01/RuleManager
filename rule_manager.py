@@ -772,6 +772,45 @@ class RuleManager:
         
         return "\n".join(lines)
 
+    def _build_comparison_tree(self, code: str, filters: Dict) -> str:
+        """Build a simple text representation of the filter tree for comparison"""
+        lines = []
+        
+        logic = filters.get("logic", "or")
+        lines.append(f"[bold magenta]ROOT: {logic.upper()}[/bold magenta]")
+        
+        if "conditions" in filters:
+            for i, condition in enumerate(filters["conditions"], 1):
+                lines.append(f"\n[yellow]Path {i}:[/yellow]")
+                if "logic" in condition:
+                    # Nested block
+                    lines.append(f"  [magenta]{condition['logic'].upper()} block:[/magenta]")
+                    nested_conditions = self._flatten_and_block(condition) if condition['logic'] == 'and' else self._extract_all_conditions(condition)
+                    for cond in nested_conditions:
+                        lines.append("    " + self._format_condition(cond))
+                else:
+                    # Simple condition
+                    lines.append("  " + self._format_condition(condition))
+        
+        return "\n".join(lines)
+
+
+    def _format_condition(self, condition: Dict) -> str:
+        """Format a single condition as a string"""
+        if "comparison" in condition:
+            return f"[green]{condition['column1']}[/green] [yellow]{condition['operator']}[/yellow] [green]{condition['column2']}[/green]"
+        else:
+            column = condition.get("column", "?")
+            operator = condition.get("operator", "?")
+            value = condition.get("value", "?")
+            
+            if isinstance(value, list):
+                value_str = f"[{', '.join(map(str, value))}]"
+            else:
+                value_str = str(value)
+            
+            return f"[green]{column}[/green] [yellow]{operator}[/yellow] [magenta]{value_str}[/magenta]"
+
 
 def show_swift_list(manager: RuleManager):
     """Show list of all Swift codes"""
@@ -972,6 +1011,109 @@ def show_all_dependencies(manager: RuleManager):
     console.print(table)
     console.print()
 
+def compare_swift_codes(manager: RuleManager, code1: str, code2: str):
+    """Compare two Swift codes side-by-side"""
+    from rich.columns import Columns
+    from rich.panel import Panel
+    from rich.table import Table
+    
+    # Validate both exist
+    if code1 not in manager.rules:
+        console.print(f"[red]'{code1}' not found[/red]")
+        return
+    if code2 not in manager.rules:
+        console.print(f"[red]'{code2}' not found[/red]")
+        return
+    
+    rule1 = manager.rules[code1]
+    rule2 = manager.rules[code2]
+    
+    console.print(f"\n[bold cyan]Comparing {code1} ↔ {code2}[/bold cyan]\n")
+    
+    # 1. Compare Dependencies
+    deps1 = set(rule1.get("DEPENDENCIES", []))
+    deps2 = set(rule2.get("DEPENDENCIES", []))
+    
+    only_in_1 = deps1 - deps2
+    only_in_2 = deps2 - deps1
+    common = deps1 & deps2
+    
+    if deps1 or deps2:
+        console.print("[bold yellow]Dependencies:[/bold yellow]")
+        
+        dep_table = Table(box=box.SIMPLE)
+        dep_table.add_column(code1, style="cyan")
+        dep_table.add_column("Status", style="dim", justify="center")
+        dep_table.add_column(code2, style="cyan")
+        
+        # Show common dependencies
+        for dep in sorted(common):
+            dep_table.add_row(dep, "✓", dep)
+        
+        # Show unique to code1
+        for dep in sorted(only_in_1):
+            dep_table.add_row(dep, "→", "[dim]-[/dim]")
+        
+        # Show unique to code2
+        for dep in sorted(only_in_2):
+            dep_table.add_row("[dim]-[/dim]", "←", dep)
+        
+        console.print(dep_table)
+        console.print()
+    
+    # 2. Compare Filter Structure
+    console.print("[bold yellow]Filter Structure:[/bold yellow]\n")
+    
+    # Build tree representations
+    tree1 = manager._build_comparison_tree(code1, rule1["filters"][0])
+    tree2 = manager._build_comparison_tree(code2, rule2["filters"][0])
+    
+    panel1 = Panel(
+        tree1,
+        title=f"[bold cyan]{code1}[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2)
+    )
+    
+    panel2 = Panel(
+        tree2,
+        title=f"[bold cyan]{code2}[/bold cyan]",
+        border_style="cyan",
+        padding=(1, 2)
+    )
+    
+    columns = Columns([panel1, panel2], equal=True, expand=True)
+    console.print(columns)
+    console.print()
+    
+    # 3. Summary of differences
+    console.print("[bold yellow]Summary:[/bold yellow]")
+    
+    differences = []
+    
+    if only_in_1:
+        differences.append(f"• {code1} has {len(only_in_1)} unique dependencies")
+    if only_in_2:
+        differences.append(f"• {code2} has {len(only_in_2)} unique dependencies")
+    
+    logic1 = rule1["filters"][0].get("logic", "or")
+    logic2 = rule2["filters"][0].get("logic", "or")
+    if logic1 != logic2:
+        differences.append(f"• Different root logic: {code1} uses {logic1.upper()}, {code2} uses {logic2.upper()}")
+    
+    paths1 = manager._extract_or_paths(rule1["filters"][0])
+    paths2 = manager._extract_or_paths(rule2["filters"][0])
+    if len(paths1) != len(paths2):
+        differences.append(f"• Different number of paths: {code1} has {len(paths1)}, {code2} has {len(paths2)}")
+    
+    if differences:
+        for diff in differences:
+            console.print(f"  {diff}")
+    else:
+        console.print("  [green]Rules are structurally similar[/green]")
+    
+    console.print()
+
 
 def main_menu(manager: RuleManager):
     """Main menu"""
@@ -987,21 +1129,39 @@ def main_menu(manager: RuleManager):
             console.print(f"[green]Current: {manager.current_swift_code}[/green]\n")
         
         console.print("[bold]Menu:[/bold]")
-        console.print("  [cyan]list[/cyan]     List all Swift codes")
-        console.print("  [cyan]deps[/cyan]     Show all dependencies")
-        console.print("  [cyan]view[/cyan]     View Swift code (read-only)")
-        console.print("  [cyan]new[/cyan]      Create new Swift code")
-        console.print("  [cyan]edit[/cyan]     Edit Swift code")
-        console.print("  [cyan]delete[/cyan]   Delete Swift code")
-        console.print("  [cyan]validate[/cyan] Validate all rules")
-        console.print("  [cyan]save[/cyan]     Save to file")
-        console.print("  [cyan]reload[/cyan]   Reload from file")
-        console.print("  [cyan]exit[/cyan]     Exit")
+        console.print("  [cyan]\\[l] list[/cyan]            List all Swift codes")
+        console.print("  [cyan]\\[d] deps[/cyan]            Show all dependencies")
+        console.print("  [cyan]\\[c] compare[/cyan]         Compare two Swift codes")
+        console.print("  [cyan]\\[v] view[/cyan]            View Swift code (read-only)")
+        console.print("  [cyan]\\[n] new[/cyan]             Create new Swift code")
+        console.print("  [cyan]\\[e] edit[/cyan]            Edit Swift code")
+        console.print("  [cyan]\\[x] delete[/cyan]          Delete Swift code")
+        console.print("  [cyan]\\[t] test/validate[/cyan]   Validate all rules")
+        console.print("  [cyan]\\[s] save[/cyan]            Save to file")
+        console.print("  [cyan]\\[r] reload[/cyan]          Reload from file")
+        console.print("  [cyan]\\[q] quit[/cyan]            Quit")
         console.print()
         
         action = Prompt.ask("Action").strip().lower()
+
+        shortcut_map = {
+            'l': 'list',
+            'd': 'deps',
+            'c': 'compare',
+            'v': 'view',
+            'n': 'new',
+            'e': 'edit',
+            'x': 'delete',
+            't': 'test',
+            's': 'save',
+            'r': 'reload',
+            'q': 'quit'
+        }
+
+        if action in shortcut_map:
+            action = shortcut_map[action]
         
-        if action == "exit":
+        if action in ["exit", "quit"]:
             if Confirm.ask("Save before exit?"):
                 manager.save_rules()
             break
@@ -1012,6 +1172,18 @@ def main_menu(manager: RuleManager):
                     
         elif action == "deps":
             show_all_dependencies(manager)
+            Prompt.ask("\n[dim]Press Enter[/dim]", default="")
+
+        elif action == "compare":
+            if len([k for k in manager.rules.keys() if k != "EXDATE"]) < 2:
+                console.print("[yellow]Need at least 2 Swift codes to compare[/yellow]")
+                continue
+            
+            show_swift_list(manager)
+            code1 = Prompt.ask("First Swift code").strip().upper()
+            code2 = Prompt.ask("Second Swift code").strip().upper()
+            
+            compare_swift_codes(manager, code1, code2)
             Prompt.ask("\n[dim]Press Enter[/dim]", default="")
         
         elif action == "view":
@@ -1071,7 +1243,7 @@ def main_menu(manager: RuleManager):
                 else:
                     console.print("[red]Not found[/red]")
         
-        elif action == "validate":
+        elif action in ["validate", "test"]:
             with console.status("[bold green]Validating rules..."):
                 result = manager.validate_rules()
             
