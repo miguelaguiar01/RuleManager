@@ -346,16 +346,25 @@ class RuleManager:
         overlaps = []
         
         for swift_code, rule in self.rules.items():
+            # Skip non-Swift code entries
+            if swift_code == "EXDATE":
+                continue
+            
             if "filters" not in rule:
                 errors.append(f"{swift_code}: Missing 'filters'")
+            elif not isinstance(rule["filters"], list):
+                errors.append(f"{swift_code}: 'filters' must be an array")
+            elif len(rule["filters"]) == 0:
+                errors.append(f"{swift_code}: 'filters' array is empty")
+            
             if "DEPENDENCIES" not in rule:
                 warnings.append(f"{swift_code}: Missing 'DEPENDENCIES'")
             
-            if "filters" in rule:
-                errors.extend(self._validate_filter_structure(rule["filters"], swift_code))
+            if "filters" in rule and rule["filters"]:
+                errors.extend(self._validate_filter_structure(rule["filters"][0], swift_code))
         
-        # Basic overlap detection
-        swift_codes = list(self.rules.keys())
+        # Basic overlap detection - only check actual Swift codes
+        swift_codes = [k for k in self.rules.keys() if k != "EXDATE"]
         for i, code1 in enumerate(swift_codes):
             for code2 in swift_codes[i+1:]:
                 if self._check_potential_overlap(code1, code2):
@@ -626,7 +635,11 @@ class RuleManager:
 
 def show_swift_list(manager: RuleManager):
     """Show list of all Swift codes"""
-    if not manager.rules:
+    # Filter out non-Swift code entries (like "swift_code")
+    actual_swift_codes = {k: v for k, v in manager.rules.items() 
+                          if k != "EXDATE" and isinstance(v.get("filters"), list)}
+    
+    if not actual_swift_codes:
         console.print("[yellow]No Swift codes defined[/yellow]\n")
         return
     
@@ -635,10 +648,15 @@ def show_swift_list(manager: RuleManager):
     table.add_column("Dependencies", style="green")
     table.add_column("Conditions", style="yellow")
     
-    for swift_code in sorted(manager.rules.keys()):
-        rule = manager.rules[swift_code]
+    for swift_code in sorted(actual_swift_codes.keys()):
+        rule = actual_swift_codes[swift_code]
         dep_count = len(rule.get("DEPENDENCIES", []))
-        cond_count = len(rule.get("filters", {}).get("conditions", []))
+        
+        # Safely get condition count
+        try:
+            cond_count = len(rule["filters"][0].get("conditions", []))
+        except (KeyError, IndexError, AttributeError):
+            cond_count = 0
         
         table.add_row(
             swift_code,
