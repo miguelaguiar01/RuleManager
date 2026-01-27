@@ -1200,11 +1200,14 @@ def main_menu(manager: RuleManager):
         
         elif action == "new":
             swift_code = Prompt.ask("Swift code").strip().upper()
-            logic = Prompt.ask("Root logic type", choices=["and", "or"], default="or")
             
             if swift_code in manager.rules:
                 console.print(f"[yellow]'{swift_code}' already exists[/yellow]")
+                if Confirm.ask("Edit it instead?", default=True):
+                    manager.select_swift_code(swift_code)
+                    edit_mode(manager)
             else:
+                logic = Prompt.ask("Root logic type", choices=["and", "or"], default="or")
                 manager.rules[swift_code] = {
                     "DEPENDENCIES": [],
                     "filters": [{
