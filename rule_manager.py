@@ -520,7 +520,36 @@ class RuleManager:
 
     def _are_contradictory(self, cond1: Dict, cond2: Dict) -> bool:
         """Check if two conditions on the same column are contradictory"""
-        # Skip column comparisons for now (complex logic)
+        
+        # Handle column vs column comparisons specially
+        if "comparison" in cond1 and "comparison" in cond2:
+            # Both are column comparisons
+            col1_left = cond1.get("column1")
+            col1_right = cond1.get("column2")
+            col2_left = cond2.get("column1")
+            col2_right = cond2.get("column2")
+            op1 = cond1.get("operator")
+            op2 = cond2.get("operator")
+            
+            # Check if they're comparing the same columns
+            if col1_left == col2_left and col1_right == col2_right:
+                # Same columns, check if operators are contradictory
+                # e.g., A > B and A < B
+                if (op1 == ">" and op2 in ["<", "<="]) or \
+                (op1 == ">=" and op2 == "<") or \
+                (op1 == "<" and op2 in [">", ">="]) or \
+                (op1 == "<=" and op2 == ">"):
+                    return True
+                
+                # Also check for equality contradictions
+                if op1 == "==" and op2 == "!=":
+                    return True
+                if op1 == "!=" and op2 == "==":
+                    return True
+            
+            return False
+        
+        # If either is a column comparison, skip (too complex for now)
         if "comparison" in cond1 or "comparison" in cond2:
             return False
         
@@ -552,10 +581,9 @@ class RuleManager:
             if isinstance(val1, list) and isinstance(val2, list):
                 return len(set(val1) & set(val2)) == 0
         
-        # Numeric contradictions
+        # Numeric contradictions (only for value comparisons, not column comparisons)
         if op1 == ">" and op2 == "<":
             try:
-                # x > 5 and x < 3 is contradictory
                 if float(val1) >= float(val2):
                     return True
             except (ValueError, TypeError):
@@ -563,7 +591,6 @@ class RuleManager:
         
         if op1 == ">=" and op2 == "<":
             try:
-                # x >= 5 and x < 5 is contradictory
                 if float(val1) >= float(val2):
                     return True
             except (ValueError, TypeError):
@@ -571,7 +598,6 @@ class RuleManager:
         
         if op1 == ">" and op2 == "<=":
             try:
-                # x > 5 and x <= 5 is contradictory
                 if float(val1) >= float(val2):
                     return True
             except (ValueError, TypeError):
