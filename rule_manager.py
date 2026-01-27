@@ -632,6 +632,120 @@ class RuleManager:
         # No contradiction detected
         return False
 
+    def display_validation_results(self, result: ValidationResult):
+        """Display validation results in a formatted way with detailed overlap information"""
+        console.print(f"\n[bold cyan]{'='*60}[/bold cyan]")
+        console.print(f"[bold]Validation Results[/bold]")
+        console.print(f"[bold cyan]{'='*60}[/bold cyan]\n")
+        
+        if result.errors:
+            console.print(f"[bold red]Errors:[/bold red]")
+            for error in result.errors:
+                console.print(f"  ✗ {error}")
+            console.print()
+        
+        if result.warnings:
+            console.print(f"[bold yellow]Warnings:[/bold yellow]")
+            for warning in result.warnings:
+                console.print(f"  ⚠ {warning}")
+            console.print()
+        
+        if result.overlaps:
+            console.print(f"[bold red]Potential Overlaps Detected:[/bold red]\n")
+            for code1, code2 in result.overlaps:
+                self._display_overlap_details(code1, code2)
+            console.print()
+        
+        if result.is_valid:
+            console.print(f"[bold green]✓ All rules are valid! No overlaps detected.[/bold green]\n")
+        else:
+            console.print(f"[bold red]✗ Validation failed. Please fix the issues above.[/bold red]\n")
+
+    def _display_overlap_details(self, code1: str, code2: str):
+        from rich.panel import Panel
+        from rich.columns import Columns
+        
+        console.print(f"[bold red]⚠ {code1} ↔ {code2}[/bold red]")
+        
+        # Extract paths from both rules
+        rule1 = self.rules[code1]
+        rule2 = self.rules[code2]
+        
+        paths1 = self._extract_or_paths(rule1["filters"][0])
+        paths2 = self._extract_or_paths(rule2["filters"][0])
+        
+        # Find which specific paths overlap
+        overlapping_paths = []
+        for i, path1 in enumerate(paths1):
+            for j, path2 in enumerate(paths2):
+                if self._paths_can_overlap(path1, path2):
+                    overlapping_paths.append((i, path1, j, path2))
+        
+        # Display each overlapping path pair
+        for idx, (i, path1, j, path2) in enumerate(overlapping_paths, 1):
+            console.print(f"\n  [yellow]Overlap #{idx}:[/yellow]")
+            
+            # Build path descriptions
+            path1_desc = self._format_path_description(path1)
+            path2_desc = self._format_path_description(path2)
+            
+            # Create side-by-side panels
+            panel1 = Panel(
+                path1_desc,
+                title=f"[cyan]{code1}[/cyan] - Path {i+1}",
+                border_style="cyan",
+                padding=(0, 1)
+            )
+            
+            panel2 = Panel(
+                path2_desc,
+                title=f"[cyan]{code2}[/cyan] - Path {j+1}",
+                border_style="cyan",
+                padding=(0, 1)
+            )
+            
+            # Display columns
+            columns = Columns([panel1, panel2], equal=True, expand=True)
+            console.print(columns)
+            
+            # Show why they overlap
+            console.print(f"  [dim]→ These paths could both match the same corporate action[/dim]")
+        
+        console.print()
+
+    def _format_path_description(self, path: List[Dict]) -> str:
+        """Format a path as a readable description"""
+        if not path:
+            return "[dim]No conditions[/dim]"
+        
+        lines = []
+        for condition in path:
+            if "comparison" in condition:
+                # Column vs column
+                lines.append(
+                    f"[green]{condition['column1']}[/green] "
+                    f"[yellow]{condition['operator']}[/yellow] "
+                    f"[green]{condition['column2']}[/green]"
+                )
+            else:
+                # Regular condition
+                column = condition.get("column", "?")
+                operator = condition.get("operator", "?")
+                value = condition.get("value", "?")
+                
+                if isinstance(value, list):
+                    value_str = f"[{', '.join(map(str, value))}]"
+                else:
+                    value_str = str(value)
+                
+                lines.append(
+                    f"[green]{column}[/green] "
+                    f"[yellow]{operator}[/yellow] "
+                    f"[magenta]{value_str}[/magenta]"
+                )
+        
+        return "\n".join(lines)
+
 
 def show_swift_list(manager: RuleManager):
     """Show list of all Swift codes"""
@@ -891,27 +1005,10 @@ def main_menu(manager: RuleManager):
                     console.print("[red]Not found[/red]")
         
         elif action == "validate":
-            result = manager.validate_rules()
+            with console.status("[bold green]Validating rules..."):
+                result = manager.validate_rules()
             
-            console.print()
-            if result.errors:
-                console.print("[bold red]Errors:[/bold red]")
-                for error in result.errors:
-                    console.print(f"  ✗ {error}")
-            
-            if result.warnings:
-                console.print("[bold yellow]Warnings:[/bold yellow]")
-                for warning in result.warnings:
-                    console.print(f"  ⚠ {warning}")
-            
-            if result.overlaps:
-                console.print("[bold red]Overlaps:[/bold red]")
-                for c1, c2 in result.overlaps:
-                    console.print(f"  ⚠ {c1} ↔ {c2}")
-            
-            if result.is_valid:
-                console.print("[bold green]✓ All valid![/bold green]")
-            
+            manager.display_validation_results(result)
             Prompt.ask("\n[dim]Press Enter[/dim]", default="")
         
         elif action == "save":
@@ -929,7 +1026,6 @@ def main_menu(manager: RuleManager):
 
 
 def edit_mode(manager: RuleManager):
-    """Interactive edit mode for current Swift code"""
     while True:
         console.clear()
         console.print(manager.build_tree_view())
@@ -1086,6 +1182,8 @@ def view_mode(manager: RuleManager):
             break  # After editing, return to main menu
         else:
             console.print("[red]Unknown action. Use 'e' to edit or 'q' to quit.[/red]")
+
+
 
 def main():
     if len(sys.argv) < 2:
