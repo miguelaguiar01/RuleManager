@@ -1,0 +1,1101 @@
+#!/usr/bin/env python3
+"""
+Corporate Action Swift Code Enrichment Rule Manager - TUI Edition
+Interactive terminal UI for managing enrichment rules
+"""
+
+import json
+import sys
+from pathlib import Path
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
+
+from rich.console import Console
+from rich.panel import Panel
+from rich.tree import Tree
+from rich.prompt import Prompt, Confirm
+from rich.table import Table
+from rich.layout import Layout
+from rich.live import Live
+from rich import box
+from rich.text import Text
+
+
+console = Console()
+
+
+@dataclass
+class ValidationResult:
+    is_valid: bool
+    overlaps: List[Tuple[str, str]]
+    errors: List[str]
+    warnings: List[str]
+
+
+class RuleManager:
+    def __init__(self, filepath: str):
+        self.filepath = Path(filepath)
+        self.rules: Dict[str, Any] = {}
+        self.current_swift_code: Optional[str] = None
+        self.current_path: List[int] = []  # Track position in nested conditions
+        self.load_rules()
+    
+    def load_rules(self):
+        if self.filepath.exists():
+            with open(self.filepath, 'r') as f:
+                self.rules = json.load(f)
+        else:
+            console.print(f"[yellow]File {self.filepath} not found. Starting fresh.[/yellow]")
+            self.rules = {}
+    
+    def save_rules(self):
+        with open(self.filepath, 'w') as f:
+            json.dump(self.rules, f, indent=2)
+        console.print(f"[green]✓ Saved to {self.filepath}[/green]")
+    
+    def get_current_rule(self) -> Optional[Dict]:
+        if not self.current_swift_code or self.current_swift_code not in self.rules:
+            return None
+        return self.rules[self.current_swift_code]
+    
+    def get_current_condition_block(self) -> Optional[Dict]:
+        """Get the current condition block we're editing based on path"""
+        rule = self.get_current_rule()
+        if not rule:
+            return None
+        
+        current = rule["filters"]
+        for index in self.current_path:
+            if "conditions" in current and index < len(current["conditions"]):
+                current = current["conditions"][index]
+            else:
+                return None
+        return current
+    
+    def add_swift_code(self, swift_code: str):
+        if swift_code in self.rules:
+            console.print(f"[yellow]'{swift_code}' already exists[/yellow]")
+            return False
+        
+        self.rules[swift_code] = {
+            "DEPENDENCIES": [],
+            "filters": {
+                "logic": "or",
+                "conditions": []
+            }
+        }
+        self.current_swift_code = swift_code
+        self.current_path = []
+        return True
+    
+    def delete_swift_code(self, swift_code: str):
+        if swift_code in self.rules:
+            del self.rules[swift_code]
+            if self.current_swift_code == swift_code:
+                self.current_swift_code = None
+                self.current_path = []
+            return True
+        return False
+    
+    def select_swift_code(self, swift_code: str):
+        if swift_code in self.rules:
+            self.current_swift_code = swift_code
+            self.current_path = []
+            return True
+        return False
+    
+    def add_dependency(self, dependency: str):
+        rule = self.get_current_rule()
+        if rule and dependency not in rule["DEPENDENCIES"]:
+            rule["DEPENDENCIES"].append(dependency)
+            return True
+        return False
+    
+    def remove_dependency(self, dependency: str):
+        rule = self.get_current_rule()
+        if rule and dependency in rule["DEPENDENCIES"]:
+            rule["DEPENDENCIES"].remove(dependency)
+            return True
+        return False
+    
+    def add_condition(self, column: str, operator: str, value: Any):
+        """Add condition to current block"""
+        block = self.get_current_condition_block()
+        if not block:
+            return False
+        
+        condition = {
+            "column": column,
+            "operator": operator,
+            "value": value
+        }
+        
+        if "conditions" not in block:
+            block["conditions"] = []
+        block["conditions"].append(condition)
+        return True
+    
+    def add_column_comparison(self, column1: str, operator: str, column2: str):
+        """Add column vs column comparison to current block"""
+        block = self.get_current_condition_block()
+        if not block:
+            return False
+        
+        condition = {
+            "comparison": "column_vs_column",
+            "column1": column1,
+            "operator": operator,
+            "column2": column2
+        }
+        
+        if "conditions" not in block:
+            block["conditions"] = []
+        block["conditions"].append(condition)
+        return True
+    
+    def add_nested_block(self, logic: str):
+        """Add nested AND/OR block to current block"""
+        block = self.get_current_condition_block()
+        if not block:
+            return False
+        
+        nested = {
+            "logic": logic.lower(),
+            "conditions": []
+        }
+        
+        if "conditions" not in block:
+            block["conditions"] = []
+        block["conditions"].append(nested)
+        return True
+    
+    def navigate_into(self, index: int):
+        """Navigate into a nested block"""
+        block = self.get_current_condition_block()
+        if not block or "conditions" not in block:
+            return False
+        
+        if index < len(block["conditions"]):
+            condition = block["conditions"][index]
+            if "logic" in condition:  # It's a nested block
+                self.current_path.append(index)
+                return True
+        return False
+    
+    def navigate_up(self):
+        """Navigate up one level"""
+        if self.current_path:
+            self.current_path.pop()
+            return True
+        return False
+    
+    def navigate_root(self):
+        """Navigate to root"""
+        self.current_path = []
+    
+    def edit_condition(self, index: int) -> bool:
+        """Edit condition at index in current block"""
+        block = self.get_current_condition_block()
+        if not block or "conditions" not in block:
+            return False
+        
+        if index >= len(block["conditions"]):
+            return False
+        
+        condition = block["conditions"][index]
+        
+        # Check if it's a nested block (can't edit those this way)
+        if "logic" in condition:
+            console.print("[yellow]Cannot edit nested blocks - navigate into them instead[/yellow]")
+            return False
+        
+        # Show current values
+        if "comparison" in condition:
+            console.print(f"Current: {condition['column1']} {condition['operator']} {condition['column2']}")
+            console.print("\n[dim]Leave blank to keep current value[/dim]")
+            
+            column1 = Prompt.ask("First column", default=condition['column1'])
+            operator = Prompt.ask("Operator", default=condition['operator'])
+            column2 = Prompt.ask("Second column", default=condition['column2'])
+            
+            condition['column1'] = column1
+            condition['operator'] = operator
+            condition['column2'] = column2
+        else:
+            # Regular condition
+            current_value = condition.get('value', '')
+            if isinstance(current_value, list):
+                current_value = ','.join(map(str, current_value))
+            
+            console.print(f"Current: {condition['column']} {condition['operator']} {current_value}")
+            console.print("\n[dim]Leave blank to keep current value[/dim]")
+            
+            column = Prompt.ask("Column name", default=condition['column'])
+            operator = Prompt.ask("Operator", default=condition['operator'])
+            value_str = Prompt.ask("Value", default=str(current_value))
+            
+            if ',' in value_str:
+                value = [v.strip() for v in value_str.split(',')]
+            else:
+                try:
+                    value = float(value_str) if '.' in value_str else int(value_str)
+                except ValueError:
+                    value = value_str
+            
+            condition['column'] = column
+            condition['operator'] = operator
+            condition['value'] = value
+        
+        return True
+    
+    def delete_condition(self, index: int):
+        """Delete condition at index in current block"""
+        block = self.get_current_condition_block()
+        if not block or "conditions" not in block:
+            return False
+        
+        if index < len(block["conditions"]):
+            block["conditions"].pop(index)
+            return True
+        return False
+    
+    def change_logic(self, logic: str):
+        """Change logic of current block"""
+        block = self.get_current_condition_block()
+        if block and "logic" in block:
+            block["logic"] = logic.lower()
+            return True
+        return False
+    
+    def build_tree_view(self) -> Panel:
+        """Build a rich tree visualization of current Swift code"""
+        if not self.current_swift_code:
+            return Panel("[yellow]No Swift code selected[/yellow]", title="Current Rule")
+        
+        rule = self.get_current_rule()
+        if not rule:
+            return Panel("[red]Error: Rule not found[/red]", title="Current Rule")
+        
+        tree = Tree(f"[bold cyan]{self.current_swift_code}[/bold cyan]")
+        
+        # Dependencies
+        if rule["DEPENDENCIES"]:
+            dep_branch = tree.add("[yellow]DEPENDENCIES[/yellow]")
+            for dep in rule["DEPENDENCIES"]:
+                dep_branch.add(f"[green]{dep}[/green]")
+        
+        # Filters
+        filters_branch = tree.add("[yellow]FILTERS[/yellow]")
+        self._build_filter_tree(filters_branch, rule["filters"], [])
+        
+        # Show current position
+        path_str = " → ".join([f"[{i}]" for i in self.current_path]) if self.current_path else "ROOT"
+        position = Text(f"Current position: {path_str}", style="dim")
+        
+        return Panel(
+            tree,
+            title=f"[bold]{self.current_swift_code}[/bold]",
+            subtitle=position,
+            border_style="cyan"
+        )
+    
+    def _build_filter_tree(self, parent_tree, filters: Dict, path: List[int]):
+        """Recursively build filter tree"""
+        is_current = path == self.current_path
+        
+        logic_style = "bold magenta" if is_current else "magenta"
+        parent_tree.add(f"[{logic_style}]Logic: {filters.get('logic', 'or').upper()}[/{logic_style}]")
+        
+        if "conditions" in filters:
+            conditions_branch = parent_tree.add(
+                f"[{logic_style}]Conditions ({len(filters['conditions'])})[/{logic_style}]"
+            )
+            
+            for i, condition in enumerate(filters["conditions"]):
+                item_style = "bold green" if is_current else "white"
+                
+                if "logic" in condition:
+                    # Nested block
+                    nested_branch = conditions_branch.add(
+                        f"[{item_style}][{i}] {condition['logic'].upper()} block[/{item_style}]"
+                    )
+                    self._build_filter_tree(nested_branch, condition, path + [i])
+                elif "comparison" in condition:
+                    # Column comparison
+                    conditions_branch.add(
+                        f"[{item_style}][{i}] {condition['column1']} "
+                        f"{condition['operator']} {condition['column2']}[/{item_style}]"
+                    )
+                else:
+                    # Regular condition
+                    value_str = str(condition.get('value', ''))
+                    if isinstance(condition.get('value'), list):
+                        value_str = f"[{', '.join(map(str, condition['value']))}]"
+                    conditions_branch.add(
+                        f"[{item_style}][{i}] {condition['column']} "
+                        f"{condition['operator']} {value_str}[/{item_style}]"
+                    )
+    
+    def validate_rules(self) -> ValidationResult:
+        errors = []
+        warnings = []
+        overlaps = []
+        
+        for swift_code, rule in self.rules.items():
+            if "filters" not in rule:
+                errors.append(f"{swift_code}: Missing 'filters'")
+            if "DEPENDENCIES" not in rule:
+                warnings.append(f"{swift_code}: Missing 'DEPENDENCIES'")
+            
+            if "filters" in rule:
+                errors.extend(self._validate_filter_structure(rule["filters"], swift_code))
+        
+        # Basic overlap detection
+        swift_codes = list(self.rules.keys())
+        for i, code1 in enumerate(swift_codes):
+            for code2 in swift_codes[i+1:]:
+                if self._check_potential_overlap(code1, code2):
+                    overlaps.append((code1, code2))
+        
+        is_valid = len(errors) == 0 and len(overlaps) == 0
+        return ValidationResult(is_valid, overlaps, errors, warnings)
+    
+    def _validate_filter_structure(self, filters: Dict, swift_code: str) -> List[str]:
+        errors = []
+        
+        if "logic" in filters and filters["logic"] not in ["and", "or"]:
+            errors.append(f"{swift_code}: Invalid logic '{filters['logic']}'")
+        
+        if "conditions" in filters:
+            for i, condition in enumerate(filters["conditions"]):
+                if "logic" in condition:
+                    errors.extend(self._validate_filter_structure(condition, swift_code))
+                elif "comparison" in condition:
+                    required = ["column1", "operator", "column2"]
+                    for req in required:
+                        if req not in condition:
+                            errors.append(f"{swift_code}[{i}]: Missing '{req}'")
+                else:
+                    required = ["column", "operator", "value"]
+                    for req in required:
+                        if req not in condition:
+                            errors.append(f"{swift_code}[{i}]: Missing '{req}'")
+        
+        return errors
+    
+    def _check_potential_overlap(self, code1: str, code2: str) -> bool:
+        """
+        Check if two Swift code rules could potentially match the same corporate action.
+        This works by extracting all logical paths through OR gates and comparing them.
+        
+        A path is one possible way the rule can evaluate to true.
+        Two rules overlap if ANY path from rule1 could match the same data as ANY path from rule2.
+        """
+        rule1 = self.rules[code1]
+        rule2 = self.rules[code2]
+        
+        # Extract all possible paths through the OR logic
+        paths1 = self._extract_or_paths(rule1["filters"])
+        paths2 = self._extract_or_paths(rule2["filters"])
+        
+        # Compare every path from rule1 against every path from rule2
+        for path1 in paths1:
+            for path2 in paths2:
+                if self._paths_can_overlap(path1, path2):
+                    return True
+        
+        return False
+
+    def _extract_or_paths(self, filters: Dict) -> List[List[Dict]]:
+        """
+        Extract all possible logical paths through a filter structure.
+        Each path is a list of conditions that must ALL be true (AND logic).
+        The paths themselves represent OR logic (any one path can be true).
+        
+        Example:
+        OR:
+        - AND: [cond1, cond2]
+        - cond3
+        - AND: [cond4, cond5]
+        
+        Returns: [[cond1, cond2], [cond3], [cond4, cond5]]
+        """
+        if "conditions" not in filters:
+            return [[]]
+        
+        logic = filters.get("logic", "or")
+        
+        if logic == "or":
+            # Each top-level condition becomes its own path
+            paths = []
+            for condition in filters["conditions"]:
+                if "logic" in condition:
+                    # It's a nested block
+                    if condition["logic"] == "and":
+                        # AND block: all conditions must be true, this is one path
+                        and_conditions = self._flatten_and_block(condition)
+                        paths.append(and_conditions)
+                    elif condition["logic"] == "or":
+                        # Nested OR block: recursively get its paths
+                        nested_paths = self._extract_or_paths(condition)
+                        paths.extend(nested_paths)
+                else:
+                    # Simple condition: it's a path by itself
+                    paths.append([condition])
+            return paths
+        
+        elif logic == "and":
+            # AND at root level: all conditions together form a single path
+            and_conditions = self._flatten_and_block(filters)
+            return [and_conditions]
+        
+        return [[]]
+
+    def _flatten_and_block(self, and_block: Dict) -> List[Dict]:
+        """
+        Flatten an AND block into a list of all leaf conditions.
+        Recursively processes nested AND blocks.
+        """
+        conditions = []
+        
+        if "conditions" not in and_block:
+            return conditions
+        
+        for condition in and_block["conditions"]:
+            if "logic" in condition:
+                if condition["logic"] == "and":
+                    # Nested AND: flatten it
+                    conditions.extend(self._flatten_and_block(condition))
+                elif condition["logic"] == "or":
+                    # Nested OR inside AND: this is complex, treat conservatively
+                    # For now, we'll skip this case or handle it separately
+                    # This would represent: (A AND B AND (C OR D))
+                    # We'd need to expand this into multiple paths: (A AND B AND C) OR (A AND B AND D)
+                    conditions.append(condition)  # Keep as-is for now
+            else:
+                # Leaf condition
+                conditions.append(condition)
+        
+        return conditions
+
+    def _paths_can_overlap(self, path1: List[Dict], path2: List[Dict]) -> bool:
+        """
+        Check if two paths (lists of AND conditions) could both be satisfied by the same data.
+        
+        Returns True if there's no contradiction between the paths.
+        Returns False if there's a clear contradiction (they can't both be true).
+        """
+        # Build a map of column -> conditions for each path
+        path1_by_column = {}
+        path2_by_column = {}
+        
+        for cond in path1:
+            col = cond.get("column") or cond.get("column1")
+            if col:
+                if col not in path1_by_column:
+                    path1_by_column[col] = []
+                path1_by_column[col].append(cond)
+        
+        for cond in path2:
+            col = cond.get("column") or cond.get("column1")
+            if col:
+                if col not in path2_by_column:
+                    path2_by_column[col] = []
+                path2_by_column[col].append(cond)
+        
+        # Check each column that appears in both paths
+        common_columns = set(path1_by_column.keys()) & set(path2_by_column.keys())
+        
+        for column in common_columns:
+            conditions1 = path1_by_column[column]
+            conditions2 = path2_by_column[column]
+            
+            # Check if all conditions on this column are compatible
+            for cond1 in conditions1:
+                for cond2 in conditions2:
+                    if self._are_contradictory(cond1, cond2):
+                        # Found a contradiction on this column
+                        # These paths definitely can't overlap
+                        return False
+        
+        # No contradictions found
+        # The paths COULD overlap (conservative approach)
+        return True
+
+    def _are_contradictory(self, cond1: Dict, cond2: Dict) -> bool:
+        """Check if two conditions on the same column are contradictory"""
+        # Skip column comparisons for now (complex logic)
+        if "comparison" in cond1 or "comparison" in cond2:
+            return False
+        
+        op1 = cond1.get("operator")
+        op2 = cond2.get("operator")
+        val1 = cond1.get("value")
+        val2 = cond2.get("value")
+        
+        # Both equality checks with different values
+        if op1 == "==" and op2 == "==":
+            return val1 != val2
+        
+        # Equality vs inequality on same value
+        if op1 == "==" and op2 == "!=":
+            return val1 == val2
+        if op1 == "!=" and op2 == "==":
+            return val1 == val2
+        
+        # Equality vs "in" list
+        if op1 == "==" and op2 == "in":
+            if isinstance(val2, list):
+                return val1 not in val2
+        if op1 == "in" and op2 == "==":
+            if isinstance(val1, list):
+                return val2 not in val1
+        
+        # Both "in" lists with no overlap
+        if op1 == "in" and op2 == "in":
+            if isinstance(val1, list) and isinstance(val2, list):
+                return len(set(val1) & set(val2)) == 0
+        
+        # Numeric contradictions
+        if op1 == ">" and op2 == "<":
+            try:
+                # x > 5 and x < 3 is contradictory
+                if float(val1) >= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op1 == ">=" and op2 == "<":
+            try:
+                # x >= 5 and x < 5 is contradictory
+                if float(val1) >= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op1 == ">" and op2 == "<=":
+            try:
+                # x > 5 and x <= 5 is contradictory
+                if float(val1) >= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op1 == "<" and op2 == ">":
+            try:
+                if float(val1) <= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op1 == "<=" and op2 == ">":
+            try:
+                if float(val1) <= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op1 == "<" and op2 == ">=":
+            try:
+                if float(val1) <= float(val2):
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        # Equality vs numeric range
+        if op1 == "==" and op2 in [">", ">=", "<", "<="]:
+            try:
+                num1 = float(val1)
+                num2 = float(val2)
+                if op2 == ">" and num1 <= num2:
+                    return True
+                if op2 == ">=" and num1 < num2:
+                    return True
+                if op2 == "<" and num1 >= num2:
+                    return True
+                if op2 == "<=" and num1 > num2:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        if op2 == "==" and op1 in [">", ">=", "<", "<="]:
+            try:
+                num1 = float(val1)
+                num2 = float(val2)
+                if op1 == ">" and num2 <= num1:
+                    return True
+                if op1 == ">=" and num2 < num1:
+                    return True
+                if op1 == "<" and num2 >= num1:
+                    return True
+                if op1 == "<=" and num2 > num1:
+                    return True
+            except (ValueError, TypeError):
+                pass
+        
+        # No contradiction detected
+        return False
+
+
+def show_swift_list(manager: RuleManager):
+    """Show list of all Swift codes"""
+    if not manager.rules:
+        console.print("[yellow]No Swift codes defined[/yellow]\n")
+        return
+    
+    table = Table(title="Swift Codes", box=box.ROUNDED)
+    table.add_column("Code", style="cyan bold")
+    table.add_column("Dependencies", style="green")
+    table.add_column("Conditions", style="yellow")
+    
+    for swift_code in sorted(manager.rules.keys()):
+        rule = manager.rules[swift_code]
+        dep_count = len(rule.get("DEPENDENCIES", []))
+        cond_count = len(rule.get("filters", {}).get("conditions", []))
+        
+        table.add_row(
+            swift_code,
+            str(dep_count),
+            str(cond_count)
+        )
+    
+    console.print(table)
+    console.print()
+
+
+def edit_mode(manager: RuleManager):
+    """Interactive edit mode for current Swift code"""
+    while True:
+        console.clear()
+        console.print(manager.build_tree_view())
+        console.print()
+        
+        console.print("[bold]Actions:[/bold]")
+        console.print("  [cyan]c[/cyan]  Add condition (column op value)")
+        console.print("  [cyan]cc[/cyan] Add column comparison")
+        console.print("  [cyan]n[/cyan]  Add nested AND/OR block")
+        console.print("  [cyan]d[/cyan]  Add dependency")
+        console.print("  [cyan]rd[/cyan] Remove dependency")
+        console.print("  [cyan]del[/cyan] Delete condition by index")
+        console.print("  [cyan]in[/cyan] Navigate into block [index]")
+        console.print("  [cyan]up[/cyan] Navigate up one level")
+        console.print("  [cyan]root[/cyan] Navigate to root")
+        console.print("  [cyan]logic[/cyan] Change current block logic")
+        console.print("  [cyan]q[/cyan]  Back to main menu")
+        console.print()
+        
+        action = Prompt.ask("Action").strip().lower()
+        
+        if action == "q":
+            break
+        
+        elif action == "c":
+            column = Prompt.ask("Column name")
+            operator = Prompt.ask("Operator (==, !=, in, >, <, >=, <=)")
+            value_str = Prompt.ask("Value (comma-separated for list)")
+            
+            if ',' in value_str:
+                value = [v.strip() for v in value_str.split(',')]
+            else:
+                # Try to convert to number if possible
+                try:
+                    value = float(value_str) if '.' in value_str else int(value_str)
+                except ValueError:
+                    value = value_str
+            
+            if manager.add_condition(column, operator, value):
+                console.print("[green]✓ Added condition[/green]")
+            else:
+                console.print("[red]✗ Failed to add condition[/red]")
+        
+        elif action == "cc":
+            column1 = Prompt.ask("First column")
+            operator = Prompt.ask("Operator (>, <, >=, <=, ==, !=)")
+            column2 = Prompt.ask("Second column")
+            
+            if manager.add_column_comparison(column1, operator, column2):
+                console.print("[green]✓ Added comparison[/green]")
+            else:
+                console.print("[red]✗ Failed to add comparison[/red]")
+        
+        elif action == "n":
+            logic = Prompt.ask("Logic type", choices=["and", "or"])
+            
+            if manager.add_nested_block(logic):
+                console.print("[green]✓ Added nested block[/green]")
+                # Auto-navigate into it
+                block = manager.get_current_condition_block()
+                if block and "conditions" in block:
+                    manager.navigate_into(len(block["conditions"]) - 1)
+            else:
+                console.print("[red]✗ Failed to add block[/red]")
+        
+        elif action == "d":
+            dependency = Prompt.ask("Dependency name")
+            if manager.add_dependency(dependency):
+                console.print("[green]✓ Added dependency[/green]")
+            else:
+                console.print("[yellow]Already exists or error[/yellow]")
+        
+        elif action == "rd":
+            rule = manager.get_current_rule()
+            if rule and rule["DEPENDENCIES"]:
+                console.print(f"Dependencies: {', '.join(rule['DEPENDENCIES'])}")
+                dependency = Prompt.ask("Dependency to remove")
+                if manager.remove_dependency(dependency):
+                    console.print("[green]✓ Removed dependency[/green]")
+                else:
+                    console.print("[red]✗ Not found[/red]")
+            else:
+                console.print("[yellow]No dependencies[/yellow]")
+        
+        elif action == "del":
+            try:
+                index = int(Prompt.ask("Condition index to delete"))
+                if manager.delete_condition(index):
+                    console.print("[green]✓ Deleted[/green]")
+                else:
+                    console.print("[red]✗ Invalid index[/red]")
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        
+        elif action == "in":
+            try:
+                index = int(Prompt.ask("Block index to enter"))
+                if manager.navigate_into(index):
+                    console.print("[green]✓ Navigated into block[/green]")
+                else:
+                    console.print("[red]✗ Not a nested block[/red]")
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        
+        elif action == "up":
+            if manager.navigate_up():
+                console.print("[green]✓ Moved up[/green]")
+            else:
+                console.print("[yellow]Already at root[/yellow]")
+        
+        elif action == "root":
+            manager.navigate_root()
+            console.print("[green]✓ At root[/green]")
+        
+        elif action == "logic":
+            logic = Prompt.ask("New logic", choices=["and", "or"])
+            if manager.change_logic(logic):
+                console.print("[green]✓ Changed logic[/green]")
+            else:
+                console.print("[red]✗ Cannot change logic here[/red]")
+        
+        else:
+            console.print("[red]Unknown action[/red]")
+        
+        console.input("\nPress Enter to continue...")
+
+
+def main_menu(manager: RuleManager):
+    """Main menu"""
+    while True:
+        console.clear()
+        console.print(Panel.fit(
+            "[bold cyan]Corporate Action Swift Code Rule Manager[/bold cyan]",
+            border_style="cyan"
+        ))
+        console.print()
+        
+        if manager.current_swift_code:
+            console.print(f"[green]Current: {manager.current_swift_code}[/green]\n")
+        
+        console.print("[bold]Menu:[/bold]")
+        console.print("  [cyan]list[/cyan]     List all Swift codes")
+        console.print("  [cyan]view[/cyan]     View Swift code (read-only)")
+        console.print("  [cyan]new[/cyan]      Create new Swift code")
+        console.print("  [cyan]edit[/cyan]     Edit Swift code")
+        console.print("  [cyan]delete[/cyan]   Delete Swift code")
+        console.print("  [cyan]validate[/cyan] Validate all rules")
+        console.print("  [cyan]save[/cyan]     Save to file")
+        console.print("  [cyan]reload[/cyan]   Reload from file")
+        console.print("  [cyan]exit[/cyan]     Exit")
+        console.print()
+        
+        action = Prompt.ask("Action").strip().lower()
+        
+        if action == "exit":
+            if Confirm.ask("Save before exit?"):
+                manager.save_rules()
+            break
+        
+        elif action == "list":
+            show_swift_list(manager)
+            Prompt.ask("\n[dim]Press Enter[/dim]", default="")
+        
+        elif action == "view":
+            if not manager.rules:
+                console.print("[yellow]No Swift codes to view[/yellow]")
+                continue
+            
+            show_swift_list(manager)
+            swift_code = Prompt.ask("Swift code to view").strip().upper()
+            if manager.select_swift_code(swift_code):
+                view_mode(manager)
+            else:
+                console.print("[red]Not found[/red]")
+        
+        elif action == "new":
+            swift_code = Prompt.ask("Swift code").strip().upper()
+            logic = Prompt.ask("Root logic type", choices=["and", "or"], default="or")
+            
+            if swift_code in manager.rules:
+                console.print(f"[yellow]'{swift_code}' already exists[/yellow]")
+            else:
+                manager.rules[swift_code] = {
+                    "DEPENDENCIES": [],
+                    "filters": {
+                        "logic": logic.lower(),
+                        "conditions": []
+                    }
+                }
+                manager.current_swift_code = swift_code
+                manager.current_path = []
+                console.print(f"[green]✓ Created {swift_code}[/green]")
+                if Confirm.ask("Edit now?", default=True):
+                    edit_mode(manager)
+        
+        elif action == "edit":
+            if not manager.rules:
+                console.print("[yellow]No Swift codes to edit[/yellow]")
+                continue
+            
+            show_swift_list(manager)
+            swift_code = Prompt.ask("Swift code to edit").strip().upper()
+            if manager.select_swift_code(swift_code):
+                edit_mode(manager)
+            else:
+                console.print("[red]Not found[/red]")
+        
+        elif action == "delete":
+            if not manager.rules:
+                console.print("[yellow]No Swift codes to delete[/yellow]")
+                continue
+            
+            show_swift_list(manager)
+            swift_code = Prompt.ask("Swift code to delete").strip().upper()
+            if Confirm.ask(f"Delete {swift_code}?"):
+                if manager.delete_swift_code(swift_code):
+                    console.print(f"[green]✓ Deleted {swift_code}[/green]")
+                else:
+                    console.print("[red]Not found[/red]")
+        
+        elif action == "validate":
+            result = manager.validate_rules()
+            
+            console.print()
+            if result.errors:
+                console.print("[bold red]Errors:[/bold red]")
+                for error in result.errors:
+                    console.print(f"  ✗ {error}")
+            
+            if result.warnings:
+                console.print("[bold yellow]Warnings:[/bold yellow]")
+                for warning in result.warnings:
+                    console.print(f"  ⚠ {warning}")
+            
+            if result.overlaps:
+                console.print("[bold red]Overlaps:[/bold red]")
+                for c1, c2 in result.overlaps:
+                    console.print(f"  ⚠ {c1} ↔ {c2}")
+            
+            if result.is_valid:
+                console.print("[bold green]✓ All valid![/bold green]")
+            
+            Prompt.ask("\n[dim]Press Enter[/dim]", default="")
+        
+        elif action == "save":
+            manager.save_rules()
+        
+        elif action == "reload":
+            if Confirm.ask("Discard unsaved changes?"):
+                manager.load_rules()
+                manager.current_swift_code = None
+                manager.current_path = []
+                console.print("[green]✓ Reloaded[/green]")
+        
+        else:
+            console.print("[red]Unknown action[/red]")
+
+
+def edit_mode(manager: RuleManager):
+    """Interactive edit mode for current Swift code"""
+    while True:
+        console.clear()
+        console.print(manager.build_tree_view())
+        console.print()
+        
+        console.print("[bold]Actions:[/bold]")
+        console.print("  [cyan]c[/cyan]    Add condition (column op value)")
+        console.print("  [cyan]cc[/cyan]   Add column comparison")
+        console.print("  [cyan]n[/cyan]    Add nested AND/OR block")
+        console.print("  [cyan]d[/cyan]    Add dependency")
+        console.print("  [cyan]rd[/cyan]   Remove dependency")
+        console.print("  [cyan]edit[/cyan] Edit condition by index")
+        console.print("  [cyan]del[/cyan]  Delete condition by index")
+        console.print("  [cyan]in[/cyan]   Navigate into block [index]")
+        console.print("  [cyan]up[/cyan]   Navigate up one level")
+        console.print("  [cyan]root[/cyan] Navigate to root")
+        console.print("  [cyan]logic[/cyan] Change current block logic")
+        console.print("  [cyan]q[/cyan]    Back to main menu")
+        console.print()
+        
+        action = Prompt.ask("Action").strip().lower()
+        
+        if action == "q":
+            break
+        
+        elif action == "c":
+            column = Prompt.ask("Column name")
+            operator = Prompt.ask("Operator (==, !=, in, >, <, >=, <=)")
+            value_str = Prompt.ask("Value (comma-separated for list)")
+            
+            if ',' in value_str:
+                value = [v.strip() for v in value_str.split(',')]
+            else:
+                # Try to convert to number if possible
+                try:
+                    value = float(value_str) if '.' in value_str else int(value_str)
+                except ValueError:
+                    value = value_str
+            
+            if manager.add_condition(column, operator, value):
+                console.print("[green]✓ Added condition[/green]")
+            else:
+                console.print("[red]✗ Failed to add condition[/red]")
+        
+        elif action == "cc":
+            column1 = Prompt.ask("First column")
+            operator = Prompt.ask("Operator (>, <, >=, <=, ==, !=)")
+            column2 = Prompt.ask("Second column")
+            
+            if manager.add_column_comparison(column1, operator, column2):
+                console.print("[green]✓ Added comparison[/green]")
+            else:
+                console.print("[red]✗ Failed to add comparison[/red]")
+        
+        elif action == "n":
+            logic = Prompt.ask("Logic type", choices=["and", "or"])
+            
+            if manager.add_nested_block(logic):
+                console.print("[green]✓ Added nested block[/green]")
+                # Auto-navigate into it
+                block = manager.get_current_condition_block()
+                if block and "conditions" in block:
+                    manager.navigate_into(len(block["conditions"]) - 1)
+            else:
+                console.print("[red]✗ Failed to add block[/red]")
+        
+        elif action == "d":
+            dependency = Prompt.ask("Dependency name")
+            if manager.add_dependency(dependency):
+                console.print("[green]✓ Added dependency[/green]")
+            else:
+                console.print("[yellow]Already exists or error[/yellow]")
+        
+        elif action == "rd":
+            rule = manager.get_current_rule()
+            if rule and rule["DEPENDENCIES"]:
+                console.print(f"Dependencies: {', '.join(rule['DEPENDENCIES'])}")
+                dependency = Prompt.ask("Dependency to remove")
+                if manager.remove_dependency(dependency):
+                    console.print("[green]✓ Removed dependency[/green]")
+                else:
+                    console.print("[red]✗ Not found[/red]")
+            else:
+                console.print("[yellow]No dependencies[/yellow]")
+        
+        elif action == "edit":
+            try:
+                index = int(Prompt.ask("Condition index to edit"))
+                if manager.edit_condition(index):
+                    console.print("[green]✓ Edited condition[/green]")
+                else:
+                    console.print("[red]✗ Failed to edit[/red]")
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        
+        elif action == "del":
+            try:
+                index = int(Prompt.ask("Condition index to delete"))
+                if manager.delete_condition(index):
+                    console.print("[green]✓ Deleted[/green]")
+                else:
+                    console.print("[red]✗ Invalid index[/red]")
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        
+        elif action == "in":
+            try:
+                index = int(Prompt.ask("Block index to enter"))
+                if manager.navigate_into(index):
+                    continue  # Immediately refresh
+                else:
+                    console.print("[red]✗ Not a nested block[/red]")
+            except ValueError:
+                console.print("[red]Invalid number[/red]")
+        
+        elif action == "up":
+            if manager.navigate_up():
+                continue  # Immediately refresh
+            else:
+                console.print("[yellow]Already at root[/yellow]")
+        
+        elif action == "root":
+            manager.navigate_root()
+            continue  # Immediately refresh
+        
+        elif action == "logic":
+            logic = Prompt.ask("New logic", choices=["and", "or"])
+            if manager.change_logic(logic):
+                console.print("[green]✓ Changed logic[/green]")
+            else:
+                console.print("[red]✗ Cannot change logic here[/red]")
+        
+        else:
+            console.print("[red]Unknown action[/red]")
+
+def view_mode(manager: RuleManager):
+    """View-only mode for current Swift code"""
+    while True:
+        console.clear()
+        console.print(manager.build_tree_view())
+        console.print()
+        
+        console.print("[bold]Actions:[/bold]")
+        console.print("  [cyan]e[/cyan] Edit this Swift code")
+        console.print("  [cyan]q[/cyan] Back to main menu")
+        console.print()
+        
+        action = Prompt.ask("Action").strip().lower()
+        
+        if action == "q":
+            break
+        elif action == "e":
+            edit_mode(manager)
+            break  # After editing, return to main menu
+        else:
+            console.print("[red]Unknown action. Use 'e' to edit or 'q' to quit.[/red]")
+
+def main():
+    if len(sys.argv) < 2:
+        console.print("[red]Usage: python rule_manager.py <rules_file.json>[/red]")
+        sys.exit(1)
+    
+    filepath = sys.argv[1]
+    manager = RuleManager(filepath)
+    
+    try:
+        main_menu(manager)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Interrupted[/yellow]")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
