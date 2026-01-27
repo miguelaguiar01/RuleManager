@@ -910,6 +910,42 @@ def edit_mode(manager: RuleManager):
         
         console.input("\nPress Enter to continue...")
 
+def show_all_dependencies(manager: RuleManager):
+    """Show all dependencies across all Swift codes"""
+    from rich.table import Table
+    
+    # Collect all dependencies
+    all_deps = {}
+    for swift_code, rule in manager.rules.items():
+        if swift_code == "EXDATE":
+            continue
+        
+        deps = rule.get("DEPENDENCIES", [])
+        for dep in deps:
+            if dep not in all_deps:
+                all_deps[dep] = []
+            all_deps[dep].append(swift_code)
+    
+    if not all_deps:
+        console.print("[yellow]No dependencies found[/yellow]\n")
+        return
+    
+    table = Table(title="All Dependencies", box=box.ROUNDED)
+    table.add_column("Dependency", style="cyan bold")
+    table.add_column("Used By", style="green")
+    table.add_column("Count", style="yellow")
+    
+    for dep in sorted(all_deps.keys()):
+        swift_codes = all_deps[dep]
+        table.add_row(
+            dep,
+            ", ".join(sorted(swift_codes)),
+            str(len(swift_codes))
+        )
+    
+    console.print(table)
+    console.print()
+
 
 def main_menu(manager: RuleManager):
     """Main menu"""
@@ -926,6 +962,7 @@ def main_menu(manager: RuleManager):
         
         console.print("[bold]Menu:[/bold]")
         console.print("  [cyan]list[/cyan]     List all Swift codes")
+        console.print("  [cyan]deps[/cyan]     Show all dependencies")
         console.print("  [cyan]view[/cyan]     View Swift code (read-only)")
         console.print("  [cyan]new[/cyan]      Create new Swift code")
         console.print("  [cyan]edit[/cyan]     Edit Swift code")
@@ -945,6 +982,10 @@ def main_menu(manager: RuleManager):
         
         elif action == "list":
             show_swift_list(manager)
+            Prompt.ask("\n[dim]Press Enter[/dim]", default="")
+                    
+        elif action == "deps":
+            show_all_dependencies(manager)
             Prompt.ask("\n[dim]Press Enter[/dim]", default="")
         
         elif action == "view":
