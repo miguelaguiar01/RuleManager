@@ -875,7 +875,7 @@ def edit_mode(manager: RuleManager):
         
         elif action == "c":
             column = Prompt.ask("Column name")
-            operator = Prompt.ask("Operator (==, !=, in, >, <, >=, <=)")
+            operator = Prompt.ask("Operator (in, not in, ==, !=, >, <, >=, <=)")
             value_str = Prompt.ask("Value (comma-separated for list)")
             
             if ',' in value_str:
