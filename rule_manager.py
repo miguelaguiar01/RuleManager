@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 
+import rule_semantics
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.tree import Tree
@@ -539,27 +541,18 @@ class RuleManager:
         # The paths COULD overlap (conservative approach)
         return True
 
-    # Canonical operators the comparison logic understands.
-    CANONICAL_OPERATORS = {"==", "!=", ">", "<", ">=", "<=", "in", "not in"}
+    # Canonical operators the comparison logic understands (shared with the
+    # data analyzer via rule_semantics).
+    CANONICAL_OPERATORS = rule_semantics.CANONICAL_OPERATORS
 
     @staticmethod
     def _values_equal(a, b):
-        """Type-tolerant equality: exact, then numeric, then string.
-        Handles add_condition coercing scalars via int() (e.g. "07" -> 7)
-        while list values stay strings."""
-        if a == b:
-            return True
-        try:
-            return float(a) == float(b)
-        except (ValueError, TypeError):
-            pass
-        return str(a) == str(b)
+        """Type-tolerant equality (shared with the data analyzer)."""
+        return rule_semantics.values_equal(a, b)
 
-    @classmethod
-    def _value_in_list(cls, value, values):
-        return isinstance(values, list) and any(
-            cls._values_equal(value, item) for item in values
-        )
+    @staticmethod
+    def _value_in_list(value, values):
+        return rule_semantics.value_in_list(value, values)
 
     def _are_contradictory(self, cond1: Dict, cond2: Dict) -> bool:
         """Check if two conditions on the same column are contradictory"""

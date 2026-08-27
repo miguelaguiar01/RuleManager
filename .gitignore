@@ -3,3 +3,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Data-audit: secrets and real names must never be committed
+*.local.toml
+.env
+.pgpass
+.pg_service.conf
+
+# Data-audit: exports contain real corporate-action data
+exports/

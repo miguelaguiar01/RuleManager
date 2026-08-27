@@ -1,0 +1,36 @@
+# ---------------------------------------------------------------------------
+# EXAMPLE config for the data-audit engine. Placeholders only.
+#
+# Copy this to a file that lives OUTSIDE the repository (e.g.
+#   ~/.rulemanager/audit.local.toml
+# ) and fill in the real values there. Never commit a filled-in copy — the
+# repo's .gitignore blocks *.local.toml, but keep real names off this machine's
+# tracked tree regardless.
+#
+# Names support two placeholders that the engine substitutes:
+#   {provider}  ->  e.g. the provider you pass on the CLI
+#   {type}      ->  each of naming.attribute_types
+# All rendered names must be lowercase Postgres identifiers ([a-z_][a-z0-9_]*).
+# ---------------------------------------------------------------------------
+
+[connection]
+# Prefer a pg_service name (from ~/.pg_service.conf) or a DSN WITHOUT a
+# password. Put the password in ~/.pgpass (chmod 600) or a PG* env var so it
+# never lives in this file.
+service = "REPLACE_ME_pg_service"
+# dsn = "postgresql://readonly_role@REPLACE_ME_host:5432/REPLACE_ME_db"
+statement_timeout_ms = 30000
+# The engine also asserts the session is read-only; use a SELECT-only role.
+
+[naming]
+ca_table          = "REPLACE_ME_ca_{provider}"
+attribute_table   = "REPLACE_ME_{type}_attrs_{provider}"
+materialized_view = "REPLACE_ME_mv_{provider}"
+attribute_types   = ["date", "int", "string", "decimal", "object"]
+
+[columns]
+ca_id          = "REPLACE_ME_{provider}_ca_id"
+mnemonic       = "mnemonic"
+swift_code     = "swift_code"
+attribute_name = "attribute"
+attribute_value = "value"
