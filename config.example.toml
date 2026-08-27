@@ -50,3 +50,19 @@ mnemonic       = "mnemonic"
 swift_code     = "swift_code"
 attribute_name = "attribute"
 attribute_value = "value"
+
+# --- Providers -------------------------------------------------------------
+# Declare each provider once. Then just: `uv run audit.py --provider bb`.
+# `rules` is the ruleset JSON you pass to RuleManager for that provider.
+# If a provider's tables/columns don't follow the shared templates above, add
+# a [providers.<name>.naming] and/or [providers.<name>.columns] table to
+# override only the keys that differ.
+
+[providers.bb]
+rules = "REPLACE_ME/enrichment_calculation_rules_bb.json"
+
+[providers.wm]
+rules = "REPLACE_ME/enrichment_calculation_rules_wm.json"
+# Example per-provider override (delete if not needed):
+# [providers.wm.columns]
+# ca_id = "wm_ca_id"

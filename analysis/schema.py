@@ -125,3 +125,30 @@ def naming_from_config(config: Dict) -> Naming:
     if "naming" not in config or "columns" not in config:
         raise ConfigError("config must contain [naming] and [columns] tables")
     return Naming.from_dict(config["naming"], config["columns"])
+
+
+def configured_providers(config: Dict) -> List[str]:
+    """Providers declared under [providers.*] in the config."""
+    return list(config.get("providers", {}).keys())
+
+
+def _provider_section(config: Dict, provider: str) -> Dict:
+    return config.get("providers", {}).get(provider, {})
+
+
+def naming_for_provider(config: Dict, provider: str) -> Naming:
+    """Shared [naming]/[columns] overlaid with any per-provider overrides in
+    [providers.<provider>.naming] / [providers.<provider>.columns]."""
+    if "naming" not in config or "columns" not in config:
+        raise ConfigError("config must contain [naming] and [columns] tables")
+    naming = dict(config["naming"])
+    columns = dict(config["columns"])
+    section = _provider_section(config, provider)
+    naming.update(section.get("naming", {}))
+    columns.update(section.get("columns", {}))
+    return Naming.from_dict(naming, columns)
+
+
+def provider_rules_path(config: Dict, provider: str):
+    """The ruleset JSON path declared for a provider, if any."""
+    return _provider_section(config, provider).get("rules")

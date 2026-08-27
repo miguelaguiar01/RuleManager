@@ -44,18 +44,28 @@ have; the engine keeps the session read-only and refuses non-read statements.
 
 ## Run
 
+Both providers are declared once in the config (`[providers.bb]`,
+`[providers.wm]`, each with its `rules` path), so day-to-day you only pick the
+provider:
+
 ```bash
-uv run python -m analysis \
-  --config ~/.rulemanager/audit.local.toml \
-  --provider bb \
-  --rules enrichment_calculation_rules_bb.json \
-  --source both \
-  --export exports/audit_bb.json
+uv run audit.py --provider bb            # BB, both sources
+uv run audit.py --provider wm --source mv
+uv run audit.py                          # every provider in the config
+uv run audit.py --provider bb --export exports/audit_bb.json
 ```
 
-`--source eav` reconstructs records from the attribute tables; `--source mv`
-reads the materialized view; `--source both` runs each and adds the integrity
-diff. Repeat with `--provider wm` and the WM ruleset.
+(`uv run audit.py` is a thin wrapper for `uv run python -m analysis` — either works.)
+
+- `--config` defaults to `~/.rulemanager/audit.local.toml`; pass `--config` to
+  point elsewhere.
+- `--rules` is optional — it defaults to `[providers.<provider>].rules` and only
+  needs to be passed to override.
+- `--source eav` reconstructs records from the attribute tables; `--source mv`
+  reads the materialized view; `--source both` runs each and adds the integrity
+  diff.
+- Omitting `--provider` runs every configured provider; with `--export`, the
+  provider name is appended to each filename automatically.
 
 ## Notes / current limits
 

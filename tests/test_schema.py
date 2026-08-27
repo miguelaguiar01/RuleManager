@@ -50,6 +50,46 @@ def test_missing_config_key_raises():
         Naming.from_dict({"ca_table": "ca_{provider}"}, {})  # missing keys
 
 
+def _two_provider_config():
+    return {
+        "naming": {
+            "ca_table": "ca_{provider}",
+            "attribute_table": "{type}_attrs_{provider}",
+            "materialized_view": "mv_{provider}",
+            "attribute_types": ["int", "string"],
+        },
+        "columns": {"ca_id": "{provider}_ca_id"},
+        "providers": {
+            "bb": {"rules": "/rules/bb.json"},
+            "wm": {"rules": "/rules/wm.json", "columns": {"ca_id": "wm_ca_id"}},
+        },
+    }
+
+
+def test_configured_providers_and_rules():
+    cfg = _two_provider_config()
+    assert schema.configured_providers(cfg) == ["bb", "wm"]
+    assert schema.provider_rules_path(cfg, "bb") == "/rules/bb.json"
+    assert schema.provider_rules_path(cfg, "wm") == "/rules/wm.json"
+    assert schema.provider_rules_path(cfg, "xx") is None
+
+
+def test_naming_for_provider_uses_shared_templates():
+    cfg = _two_provider_config()
+    s = build_provider_schema("bb", schema.naming_for_provider(cfg, "bb"))
+    assert s.ca_table == "ca_bb"
+    assert s.ca_id == "bb_ca_id"          # from shared template
+    assert s.attribute_tables["string"] == "string_attrs_bb"
+
+
+def test_naming_for_provider_applies_override():
+    cfg = _two_provider_config()
+    # wm overrides ca_id to a fixed name (no template)
+    s = build_provider_schema("wm", schema.naming_for_provider(cfg, "wm"))
+    assert s.ca_id == "wm_ca_id"
+    assert s.ca_table == "ca_wm"          # still from shared template
+
+
 def test_load_config_from_file(tmp_path):
     cfg = tmp_path / "audit.local.toml"
     cfg.write_text(
