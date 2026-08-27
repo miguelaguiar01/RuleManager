@@ -780,20 +780,22 @@ class RuleManager:
                 path1_desc,
                 title=f"[cyan]{code1}[/cyan] - Path {i+1}",
                 border_style="cyan",
-                padding=(0, 1)
+                padding=(0, 1),
+                expand=False
             )
-            
+
             panel2 = Panel(
                 path2_desc,
                 title=f"[cyan]{code2}[/cyan] - Path {j+1}",
                 border_style="cyan",
-                padding=(0, 1)
+                padding=(0, 1),
+                expand=False
             )
-            
-            # Display panels flush side-by-side, each filling half the width
-            grid = Table.grid(expand=True, padding=(0, 2))
-            grid.add_column(ratio=1)
-            grid.add_column(ratio=1)
+
+            # Content-sized panels side-by-side with a small gap (stable at any width)
+            grid = Table.grid(padding=(0, 2))
+            grid.add_column()
+            grid.add_column()
             grid.add_row(panel1, panel2)
             console.print(grid)
 
@@ -1135,19 +1137,21 @@ def compare_swift_codes(manager: RuleManager, code1: str, code2: str):
         tree1,
         title=f"[bold cyan]{code1}[/bold cyan]",
         border_style="cyan",
-        padding=(1, 2)
+        padding=(1, 2),
+        expand=False
     )
-    
+
     panel2 = Panel(
         tree2,
         title=f"[bold cyan]{code2}[/bold cyan]",
         border_style="cyan",
-        padding=(1, 2)
+        padding=(1, 2),
+        expand=False
     )
-    
-    grid = Table.grid(expand=True, padding=(0, 2))
-    grid.add_column(ratio=1)
-    grid.add_column(ratio=1)
+
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column()
+    grid.add_column()
     grid.add_row(panel1, panel2)
     console.print(grid)
     console.print()
