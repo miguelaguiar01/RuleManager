@@ -53,3 +53,13 @@ def test_connection_params_service():
     dsn, kwargs = db._connection_params({"service": "mysvc"})
     assert dsn is None
     assert kwargs == {"service": "mysvc"}
+
+
+def test_session_statements_inline_timeout_no_bind_params():
+    # SET rejects bind parameters ($1); the timeout must be inlined as a literal.
+    texts = [s.as_string(None) for s in db._session_statements(30000)]
+    assert "SET statement_timeout = 30000" in texts
+    assert "SET idle_in_transaction_session_timeout = 30000" in texts
+    for t in texts:
+        assert "%s" not in t and "$1" not in t
+        db._assert_read_only(t, None)   # still passes the read-only guard

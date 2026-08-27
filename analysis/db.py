@@ -69,10 +69,20 @@ def connect(config: Dict):
     conn.autocommit = True
 
     timeout = int(conn_cfg.get("statement_timeout_ms", 30000))
-    _run(conn, sql.SQL("SET default_transaction_read_only = on")).close()
-    _run(conn, sql.SQL("SET statement_timeout = %s"), (timeout,)).close()
-    _run(conn, sql.SQL("SET idle_in_transaction_session_timeout = %s"), (timeout,)).close()
+    for statement in _session_statements(timeout):
+        _run(conn, statement).close()
     return conn
+
+
+def _session_statements(timeout_ms: int):
+    """Session GUCs. SET does not accept bind parameters, so the (integer,
+    config-controlled) timeout is inlined as a SQL literal, not a %s param."""
+    ms = sql.Literal(int(timeout_ms))
+    return [
+        sql.SQL("SET default_transaction_read_only = on"),
+        sql.SQL("SET statement_timeout = {}").format(ms),
+        sql.SQL("SET idle_in_transaction_session_timeout = {}").format(ms),
+    ]
 
 
 def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
