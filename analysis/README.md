@@ -31,9 +31,10 @@ ruleset and reports five things:
 No special database role is required — connect with whatever user you already
 have; the engine keeps the session read-only and refuses non-read statements.
 
-1. **Copy the config out of the repo** and fill in real values:
+1. **Copy the config** and fill in real values (a `*.local.toml` name is
+   gitignored, so it is safe even inside the repo dir):
    ```bash
-   cp config.example.toml ~/.rulemanager/audit.local.toml
+   cp config.example.toml ~/RuleManager/audit.local.toml
    ```
 2. **Fill in `[connection]`.** For a Docker Postgres, use the plain fields
    (`host`, `port`, `dbname`, `user`, `password`/`~/.pgpass`, `sslmode`). If you
@@ -57,7 +58,7 @@ uv run audit.py --provider bb --export exports/audit_bb.json
 
 (`uv run audit.py` is a thin wrapper for `uv run python -m analysis` — either works.)
 
-- `--config` defaults to `~/.rulemanager/audit.local.toml`; pass `--config` to
+- `--config` defaults to `~/RuleManager/audit.local.toml`; pass `--config` to
   point elsewhere.
 - `--rules` is optional — it defaults to `[providers.<provider>].rules` and only
   needs to be passed to override.

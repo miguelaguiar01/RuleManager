@@ -2,7 +2,7 @@
 # EXAMPLE config for the data-audit engine. Placeholders only.
 #
 # Copy this to a file that lives OUTSIDE the repository (e.g.
-#   ~/.rulemanager/audit.local.toml
+#   ~/RuleManager/audit.local.toml
 # ) and fill in the real values there. Never commit a filled-in copy — the
 # repo's .gitignore blocks *.local.toml, but keep real names off this machine's
 # tracked tree regardless.

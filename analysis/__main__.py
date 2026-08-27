@@ -32,8 +32,8 @@ from .schema import (
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(prog="audit", description="Corporate-action rule/data audit")
-    p.add_argument("--config", default="~/.rulemanager/audit.local.toml",
-                   help="Path to the laptop-only TOML config (outside the repo)")
+    p.add_argument("--config", default="~/RuleManager/audit.local.toml",
+                   help="Path to the laptop-only TOML config (a *.local.toml name is gitignored)")
     p.add_argument("--provider", help="Provider to run (e.g. bb, wm). Omit to run every configured provider.")
     p.add_argument("--rules", help="Ruleset JSON (overrides [providers.<provider>].rules)")
     p.add_argument("--source", choices=["eav", "mv", "both"], default="both",
