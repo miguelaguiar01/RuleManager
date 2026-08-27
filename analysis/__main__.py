@@ -12,6 +12,7 @@ The ruleset path comes from [providers.<provider>].rules (override with
 (override per provider under [providers.<provider>]).
 """
 import argparse
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
@@ -72,6 +73,15 @@ def export_path(base: str, provider: str, multi: bool) -> Path:
     return p.with_name(f"{p.stem}_{provider}{p.suffix}") if multi else p
 
 
+def _load(console: Console, label: str, factory):
+    """Run a fetch with a live spinner, then report how many rows and how long."""
+    start = time.perf_counter()
+    with console.status(f"[cyan]{label}…[/cyan]", spinner="dots"):
+        rows = list(factory())
+    console.print(f"[dim]  {label}: {len(rows):,} rows in {time.perf_counter() - start:.1f}s[/dim]")
+    return rows
+
+
 def _audit(console: Console, source_name: str, records_map: Dict, rules: Dict, overlaps, examples: int):
     evaluated = analyses.evaluate(rules, records_map.values())
     summary = analyses.summarize(source_name, evaluated, rules, examples=examples)
@@ -100,8 +110,8 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
     integrity_report = None
 
     if args.source in ("eav", "both"):
-        base = list(db.fetch_base(conn, schema, columns))
-        attrs = list(db.fetch_attributes(conn, schema, columns))
+        base = _load(console, "fetch base CAs", lambda: db.fetch_base(conn, schema, columns))
+        attrs = _load(console, "fetch attributes", lambda: db.fetch_attributes(conn, schema, columns))
         eav_records = rec.build_records_from_eav(base, attrs)
         summary, realized, evaluated = _audit(console, "eav", eav_records, rules, overlaps, args.examples)
         summaries.append(summary)
@@ -109,7 +119,7 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
         eval_by_source["eav"] = evaluated
 
     if args.source in ("mv", "both"):
-        mv_rows = list(db.fetch_mv(conn, schema, columns))
+        mv_rows = _load(console, "fetch materialized view", lambda: db.fetch_mv(conn, schema, columns))
         mv_records = rec.build_records_from_mv(mv_rows, columns)
         summary, realized, evaluated = _audit(console, "mv", mv_records, rules, overlaps, args.examples)
         summaries.append(summary)
@@ -162,12 +172,35 @@ def main(argv=None):
     multi = len(providers) > 1
 
     from . import db
-    conn = db.connect(config)
+
+    target = _connection_target(config)
+    start = time.perf_counter()
+    try:
+        with console.status(f"[cyan]Connecting to {target}…[/cyan]", spinner="dots"):
+            conn = db.connect(config)
+    except Exception as exc:  # surface connection problems clearly, don't hang
+        console.print(f"[red]✗ Could not connect to {target}: {exc}[/red]")
+        raise SystemExit(1)
+    console.print(f"[green]✓ Connected to {target}[/green] [dim]({time.perf_counter() - start:.1f}s)[/dim]")
+
     try:
         for provider in providers:
             _run_provider(console, conn, config, provider, args, multi)
     finally:
         conn.close()
+
+
+def _connection_target(config: Dict) -> str:
+    """A short human label for what we're connecting to (never the password)."""
+    conn_cfg = config.get("connection", {})
+    if conn_cfg.get("dsn"):
+        return "configured DSN"
+    if conn_cfg.get("service"):
+        return f"service {conn_cfg['service']}"
+    host = conn_cfg.get("host", "localhost")
+    port = conn_cfg.get("port", 5432)
+    dbname = conn_cfg.get("dbname", "")
+    return f"{host}:{port}/{dbname}"
 
 
 if __name__ == "__main__":

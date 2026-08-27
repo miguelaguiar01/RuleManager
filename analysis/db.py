@@ -24,7 +24,8 @@ _READ_ONLY_PREFIXES = ("select", "with", "set", "show")
 
 # libpq connection keywords accepted directly from [connection], so a local or
 # Docker Postgres can be configured with plain host/port/dbname/user.
-_LIBPQ_KEYS = ("dsn", "service", "host", "port", "dbname", "user", "password", "sslmode")
+_LIBPQ_KEYS = ("dsn", "service", "host", "port", "dbname", "user", "password",
+               "sslmode", "connect_timeout")
 
 
 class WriteAttemptError(RuntimeError):
@@ -68,12 +69,16 @@ def connect(config: Dict):
     """
     conn_cfg = config.get("connection", {})
     dsn, kwargs = _connection_params(conn_cfg)
+    # Fail fast on an unreachable host instead of hanging (overridable in config).
+    kwargs.setdefault("connect_timeout", int(conn_cfg.get("connect_timeout", 10)))
 
     conn = psycopg.connect(dsn, **kwargs) if dsn else psycopg.connect(**kwargs)
     conn.read_only = True
     conn.autocommit = True
 
-    timeout = int(conn_cfg.get("statement_timeout_ms", 30000))
+    # Generous default so large legitimate reads aren't cancelled; still a
+    # backstop against a runaway query. Tune with connection.statement_timeout_ms.
+    timeout = int(conn_cfg.get("statement_timeout_ms", 300000))
     for statement in _session_statements(timeout):
         _run(conn, statement).close()
     return conn

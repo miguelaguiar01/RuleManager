@@ -55,6 +55,11 @@ def test_connection_params_service():
     assert kwargs == {"service": "mysvc"}
 
 
+def test_connection_params_passes_connect_timeout():
+    dsn, kwargs = db._connection_params({"host": "h", "connect_timeout": 5})
+    assert kwargs["connect_timeout"] == 5
+
+
 def test_qualified_table_includes_schema():
     from analysis import schema as sc
     naming = sc.Naming(

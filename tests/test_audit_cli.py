@@ -49,6 +49,16 @@ def test_export_path_multi_provider_appends_name():
     assert cli.export_path("exports/audit.json", "wm", multi=True) == Path("exports/audit_wm.json")
 
 
+def test_connection_target_host_port():
+    cfg = {"connection": {"host": "db.dev", "port": 5433, "dbname": "mdm_ca"}}
+    assert cli._connection_target(cfg) == "db.dev:5433/mdm_ca"
+
+
+def test_connection_target_hides_dsn_and_service():
+    assert cli._connection_target({"connection": {"dsn": "postgresql://secret@h/d"}}) == "configured DSN"
+    assert cli._connection_target({"connection": {"service": "prod"}}) == "service prod"
+
+
 def test_parse_args_provider_optional():
     args = cli.parse_args(["--provider", "bb"])
     assert args.provider == "bb"

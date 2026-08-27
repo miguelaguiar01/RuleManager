@@ -27,7 +27,8 @@ user = "REPLACE_ME_readonly_role"
 # password = "REPLACE_ME"         # prefer ~/.pgpass (chmod 600); this file is
                                   # gitignored, but keep secrets out where you can
 # sslmode = "disable"             # local Docker often needs this
-statement_timeout_ms = 30000
+connect_timeout = 10              # seconds; fail fast if the host is unreachable
+statement_timeout_ms = 300000     # 5 min cap per query; raise for very large fetches
 #
 # (B) A libpq DSN instead of the fields above:
 # dsn = "postgresql://REPLACE_ME_readonly_role@REPLACE_ME_host:5432/REPLACE_ME_db"
