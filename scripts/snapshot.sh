@@ -17,6 +17,9 @@
 # Config: scripts/snapshot.env (gitignored). Copy the .example first.
 # Alias:  alias ca-snapshot='sh ~/RuleManager/scripts/snapshot.sh'
 set -eu
+# Enable pipefail where the shell supports it, so a failed pg_dump in the
+# dump|restore pipe aborts the run (dash lacks it — the test just no-ops).
+if ( set -o pipefail ) 2>/dev/null; then set -o pipefail; fi
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ENV_FILE=${SNAPSHOT_ENV:-$HERE/snapshot.env}
@@ -52,11 +55,9 @@ if [ "$DUMP_CONTEXT" = "$RESTORE_CONTEXT" ]; then
     exit 1
 fi
 
-LOCAL_DUMP=$(mktemp "${TMPDIR:-/tmp}/ca-snapshot.XXXXXX")
-POD_DUMP=/tmp/ca-snapshot.dump
+# The dump is streamed straight into pg_restore — no temp file, no kubectl cp.
 ORIGINAL_CONTEXT=$(kubectl config current-context 2>/dev/null || true)
 cleanup() {
-    rm -f "$LOCAL_DUMP"
     [ -n "$ORIGINAL_CONTEXT" ] && kubectl config use-context "$ORIGINAL_CONTEXT" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
@@ -92,18 +93,6 @@ fi
 export PGPASSWORD
 
 label="${SRC_DB}${SRC_SCHEMA:+ (schema $SRC_SCHEMA)}"
-echo "==> [1/4] Dumping ${label} from ${SRC_HOST} via ${SRC_NS}/${POD} ... (can take a while)"
-
-# Branch on the optional schema flag (no arrays / no 'set --', for max shell portability).
-if [ -n "$SRC_SCHEMA" ]; then
-    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
-        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -n "$SRC_SCHEMA" -Fc > "$LOCAL_DUMP"
-else
-    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
-        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -Fc > "$LOCAL_DUMP"
-fi
-[ -s "$LOCAL_DUMP" ] || { echo "ERROR: dump is empty — check credentials / schema name." >&2; exit 1; }
-echo "    dump size: $(du -h "$LOCAL_DUMP" | cut -f1)"
 
 # ==== PHASE 2: RESTORE (local cluster) =====================================
 echo "== Switching to LOCAL context to restore =="
@@ -125,8 +114,11 @@ if [ -z "$LOCAL_PGPASSWORD" ] && [ -n "${LOCAL_SECRET:-}" ] && [ -n "${LOCAL_SEC
         get secret "$LOCAL_SECRET" -o "jsonpath={.data.${LOCAL_SECRET_KEY}}" | base64 -d)
 fi
 
-echo "==> [2/4] Copying dump into ${RESTORE_CONTEXT}:${LOCAL_NS}/${LOCAL_POD} ..."
-kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" cp "$LOCAL_DUMP" "$LOCAL_POD:$POD_DUMP"
+# helper: run psql in the local pod (args after --); no stdin
+local_psql() {
+    kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
+        env PGPASSWORD="$LOCAL_PGPASSWORD" psql -w -U "$LOCAL_SUPERUSER" "$@"
+}
 
 # ---- DESTRUCTIVE STEP: re-verify context immediately before the drop ------
 NOW_CTX=$(kubectl config current-context)
@@ -134,24 +126,43 @@ if [ "$NOW_CTX" != "$RESTORE_CONTEXT" ] || [ "$NOW_CTX" = "$DUMP_CONTEXT" ]; the
     echo "ABORT: about to DROP DATABASE but context is '$NOW_CTX', not the restore target '$RESTORE_CONTEXT'." >&2
     exit 1
 fi
-echo "==> [3/4] Recreating ${TARGET_DB} on ${NOW_CTX}:${LOCAL_NS}/${LOCAL_POD} (drop + create) ..."
-kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-    env PGPASSWORD="$LOCAL_PGPASSWORD" \
-    psql -w -U "$LOCAL_SUPERUSER" -d postgres -v ON_ERROR_STOP=1 \
+echo "==> [1/4] Recreating ${TARGET_DB} on ${NOW_CTX}:${LOCAL_NS}/${LOCAL_POD} (drop + create) ..."
+local_psql -d postgres -v ON_ERROR_STOP=1 \
     -c "DROP DATABASE IF EXISTS \"$TARGET_DB\" WITH (FORCE);" \
     -c "CREATE DATABASE \"$TARGET_DB\";"
 
-echo "==> [4/4] Restoring snapshot (schema, data, indexes, constraints, matviews) ..."
-kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-    env PGPASSWORD="$LOCAL_PGPASSWORD" \
-    pg_restore -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges -j "$JOBS" "$POD_DUMP"
-kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- rm -f "$POD_DUMP" || true
+echo "==> [2/4] Validating drop + create ..."
+exists=$(local_psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$TARGET_DB';" | tr -d '[:space:]')
+[ "$exists" = "1" ] \
+    || { echo "ERROR: database '$TARGET_DB' does not exist after create — aborting before restore." >&2; exit 1; }
+pre=$(local_psql -d "$TARGET_DB" -tAc \
+    "SELECT count(*) FROM pg_tables WHERE schemaname NOT IN ('pg_catalog','information_schema');" | tr -d '[:space:]')
+[ "$pre" = "0" ] \
+    || { echo "ERROR: '$TARGET_DB' is not empty (${pre} tables) after recreate — aborting." >&2; exit 1; }
+echo "    OK: '$TARGET_DB' exists and is empty."
 
+# ---- stream the custom-format dump straight into pg_restore ---------------
+# No intermediate file, no 'kubectl cp', no parallel -j — those corrupted the
+# 339M archive. A single -Fc stream, restored in one pass.
+echo "==> [3/4] Streaming ${label} from ${SRC_HOST} into ${TARGET_DB} ... (can take a while)"
+if [ -n "$SRC_SCHEMA" ]; then
+    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
+        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -n "$SRC_SCHEMA" -Fc \
+      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- env PGPASSWORD="$LOCAL_PGPASSWORD" \
+        pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges
+else
+    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
+        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -Fc \
+      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- env PGPASSWORD="$LOCAL_PGPASSWORD" \
+        pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges
+fi
+
+echo "==> [4/4] Validating restore ..."
 count_schema=${SRC_SCHEMA:-public}
-tables=$(kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-    env PGPASSWORD="$LOCAL_PGPASSWORD" \
-    psql -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" -tAc \
+tables=$(local_psql -d "$TARGET_DB" -tAc \
     "SELECT count(*) FROM information_schema.tables WHERE table_schema = '$count_schema';" | tr -d '[:space:]')
+{ [ -n "$tables" ] && [ "$tables" -gt 0 ] 2>/dev/null; } \
+    || { echo "ERROR: no tables found in schema '$count_schema' after restore." >&2; exit 1; }
 
 echo "OK Snapshot ready on ${RESTORE_CONTEXT}: ${TARGET_DB} — ${tables} tables in schema '${count_schema}'."
 echo "   Point the audit at the local DB and run:  uv run audit.py"
