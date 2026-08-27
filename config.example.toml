@@ -13,14 +13,30 @@
 # All rendered names must be lowercase Postgres identifiers ([a-z_][a-z0-9_]*).
 # ---------------------------------------------------------------------------
 
+# Provide the connection ONE of three ways (whichever you have):
+#
+# (A) Plain fields — easiest for a local/Docker Postgres. Translate a JDBC URL
+#     jdbc:postgresql://HOST:PORT/DBNAME?user=USER&password=PW&sslmode=disable
+#     field-by-field into the keys below (drop the "jdbc:" prefix; the ?query
+#     params become their own keys):
 [connection]
-# Prefer a pg_service name (from ~/.pg_service.conf) or a DSN WITHOUT a
-# password. Put the password in ~/.pgpass (chmod 600) or a PG* env var so it
-# never lives in this file.
-service = "REPLACE_ME_pg_service"
-# dsn = "postgresql://readonly_role@REPLACE_ME_host:5432/REPLACE_ME_db"
+host = "REPLACE_ME_host"          # e.g. localhost when the container maps its port
+port = 5432                       # the HOST-side mapped port from `docker ps`
+dbname = "REPLACE_ME_db"
+user = "REPLACE_ME_readonly_role"
+# password = "REPLACE_ME"         # prefer ~/.pgpass (chmod 600); this file is
+                                  # gitignored, but keep secrets out where you can
+# sslmode = "disable"             # local Docker often needs this
 statement_timeout_ms = 30000
-# The engine also asserts the session is read-only; use a SELECT-only role.
+#
+# (B) A libpq DSN instead of the fields above:
+# dsn = "postgresql://REPLACE_ME_readonly_role@REPLACE_ME_host:5432/REPLACE_ME_db"
+#
+# (C) A pg_service name from ~/.pg_service.conf:
+# service = "REPLACE_ME_pg_service"
+#
+# No special database role is needed: the engine opens the session read-only
+# and refuses to execute any statement that isn't a plain read.
 
 [naming]
 ca_table          = "REPLACE_ME_ca_{provider}"

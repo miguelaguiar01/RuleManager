@@ -53,5 +53,8 @@ def test_no_connection_strings_or_passwords_in_source():
 def test_example_config_is_placeholders_only():
     example = (REPO / "config.example.toml").read_text()
     assert "REPLACE_ME" in example
-    # No live credentials in the example DSN line.
-    assert "postgresql://readonly_role@REPLACE_ME_host" in example
+    # Any DSN shown in the example must be a placeholder, not a live host.
+    placeholders = ("REPLACE_ME", "HOST", "DBNAME", "USER")
+    for line in example.splitlines():
+        if "postgresql://" in line:
+            assert any(p in line for p in placeholders), f"non-placeholder DSN in example: {line!r}"

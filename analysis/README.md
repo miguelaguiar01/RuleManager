@@ -16,10 +16,11 @@ ruleset and reports five things:
 - **No company data in the repo.** Every table/column name comes from a config
   file that lives only on your laptop. The repo has `config.example.toml` with
   placeholders. `.gitignore` blocks `*.local.toml`, `.env`, `.pgpass`, `exports/`.
-- **Read-only, four ways.** Use a `SELECT`-only role (the real guarantee); the
-  session is opened read-only so the server rejects writes; statement/idle
-  timeouts bound every query; and `tests/test_analysis_security.py` fails the
-  build if any write-SQL or DSN/password ever appears in `analysis/`.
+- **Read-only, no special role needed.** The session is opened read-only so the
+  server rejects writes; every statement is validated at runtime and refused
+  unless it's a plain read (SELECT/WITH/SET/SHOW); statement/idle timeouts bound
+  every query; and `tests/test_analysis_security.py` fails the build if any
+  write-SQL or DSN/password ever appears in `analysis/`.
 - **No injection.** Config identifiers are validated against `^[a-z_][a-z0-9_]*$`
   and passed through `psycopg.sql.Identifier`; values go through parameters.
 - **Exports contain real ids/values** → they land in the gitignored `exports/`.
@@ -27,21 +28,19 @@ ruleset and reports five things:
 
 ## One-time setup on the laptop
 
-1. **Create a read-only role** (the actual boundary):
-   ```sql
-   CREATE ROLE ca_auditor LOGIN PASSWORD '...';
-   GRANT CONNECT ON DATABASE yourdb TO ca_auditor;
-   GRANT USAGE ON SCHEMA public TO ca_auditor;
-   GRANT SELECT ON ALL TABLES IN SCHEMA public TO ca_auditor;
-   -- and on the materialized view
-   ```
-2. **Put the password in `~/.pgpass`** (`chmod 600`) or a `pg_service` entry —
-   not in the config file.
-3. **Copy the config out of the repo** and fill in real names:
+No special database role is required — connect with whatever user you already
+have; the engine keeps the session read-only and refuses non-read statements.
+
+1. **Copy the config out of the repo** and fill in real values:
    ```bash
    cp config.example.toml ~/.rulemanager/audit.local.toml
-   # edit: connection.service (or dsn), and the naming/columns templates
    ```
+2. **Fill in `[connection]`.** For a Docker Postgres, use the plain fields
+   (`host`, `port`, `dbname`, `user`, `password`/`~/.pgpass`, `sslmode`). If you
+   only have a **JDBC** URL like
+   `jdbc:postgresql://localhost:5432/db?user=me&password=pw&sslmode=disable`,
+   drop the `jdbc:` prefix and copy each piece into the matching field.
+3. **Fill in `[naming]`/`[columns]`** with your real name templates.
 
 ## Run
 

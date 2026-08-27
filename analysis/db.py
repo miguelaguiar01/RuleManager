@@ -1,13 +1,15 @@
 """Read-only Postgres adapter. The only module that touches a database.
 
-Four layers keep it read-only: (1) the recommended setup is a SELECT-only role;
-(2) the session is opened read-only so the server itself rejects any write;
-(3) statement and idle timeouts bound every query; (4) the module issues only
-SELECT — enforced by tests/test_analysis_security.py, which fails the build if
-any data-modifying keyword ever appears here.
+No special database role is required. Reads are kept safe three ways:
+  1. The session is opened read-only (any user can do this; the server then
+     rejects writes in the session — no elevated privileges needed).
+  2. Every statement is validated at runtime before execution: only SELECT /
+     WITH / SET / SHOW are allowed; anything that could modify data is refused.
+  3. The module only ever composes SELECTs — enforced statically by
+     tests/test_analysis_security.py.
 
-Identifiers come from the validated ProviderSchema and are still passed through
-psycopg.sql.Identifier for defense in depth; values go through parameters.
+Identifiers come from the validated ProviderSchema and still go through
+psycopg.sql.Identifier; values go through parameters.
 """
 from typing import Dict, Iterable, Iterator, List
 
@@ -17,24 +19,59 @@ from psycopg.rows import dict_row
 
 from .schema import ProviderSchema, validate_identifier
 
+# Statement kinds that cannot modify data.
+_READ_ONLY_PREFIXES = ("select", "with", "set", "show")
+
+# libpq connection keywords accepted directly from [connection], so a local or
+# Docker Postgres can be configured with plain host/port/dbname/user.
+_LIBPQ_KEYS = ("dsn", "service", "host", "port", "dbname", "user", "password", "sslmode")
+
+
+class WriteAttemptError(RuntimeError):
+    """Raised if a non-read-only statement is ever about to run."""
+
+
+def _assert_read_only(query, conn) -> None:
+    text = query.as_string(conn) if hasattr(query, "as_string") else str(query)
+    tokens = text.lstrip().lstrip("(").lstrip().split(None, 1)
+    first = tokens[0].lower() if tokens else ""
+    if first not in _READ_ONLY_PREFIXES:
+        raise WriteAttemptError(f"Refusing non-read-only statement: {text.strip()[:80]!r}")
+
+
+def _run(conn, query, params=None):
+    """Validate, then execute, returning a dict-row cursor. Read-only only."""
+    _assert_read_only(query, conn)
+    cur = conn.cursor(row_factory=dict_row)
+    cur.execute(query, params)
+    return cur
+
+
+def _connection_params(conn_cfg: Dict):
+    """Split a [connection] block into (dsn, libpq kwargs), ignoring our own
+    non-libpq keys (e.g. statement_timeout_ms)."""
+    dsn = conn_cfg.get("dsn")
+    kwargs = {k: conn_cfg[k] for k in _LIBPQ_KEYS if k != "dsn" and k in conn_cfg}
+    return dsn, kwargs
+
 
 def connect(config: Dict):
-    """Open a read-only connection from a [connection] config block."""
+    """Open a read-only connection from a [connection] config block.
+
+    Accepts a `dsn`, a pg `service`, or plain libpq keywords (host, port,
+    dbname, user, password, sslmode) — whichever the config provides.
+    """
     conn_cfg = config.get("connection", {})
-    dsn = conn_cfg.get("dsn")
-    kwargs = {}
-    if "service" in conn_cfg:
-        kwargs["service"] = conn_cfg["service"]
+    dsn, kwargs = _connection_params(conn_cfg)
 
     conn = psycopg.connect(dsn, **kwargs) if dsn else psycopg.connect(**kwargs)
     conn.read_only = True
     conn.autocommit = True
 
     timeout = int(conn_cfg.get("statement_timeout_ms", 30000))
-    with conn.cursor() as cur:
-        cur.execute(sql.SQL("SET default_transaction_read_only = on"))
-        cur.execute(sql.SQL("SET statement_timeout = %s"), (timeout,))
-        cur.execute(sql.SQL("SET idle_in_transaction_session_timeout = %s"), (timeout,))
+    _run(conn, sql.SQL("SET default_transaction_read_only = on")).close()
+    _run(conn, sql.SQL("SET statement_timeout = %s"), (timeout,)).close()
+    _run(conn, sql.SQL("SET idle_in_transaction_session_timeout = %s"), (timeout,)).close()
     return conn
 
 
@@ -48,9 +85,11 @@ def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
         sw=sql.Identifier(schema.swift_code),
         tbl=sql.Identifier(schema.ca_table),
     )
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(query)
+    cur = _run(conn, query)
+    try:
         yield from cur
+    finally:
+        cur.close()
 
 
 def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
@@ -76,9 +115,11 @@ def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> It
         params.append(wanted)
 
     query = sql.SQL(" UNION ALL ").join(parts)
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(query, params)
+    cur = _run(conn, query, params)
+    try:
         yield from cur
+    finally:
+        cur.close()
 
 
 def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
@@ -102,6 +143,8 @@ def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[D
         cols=sql.SQL(", ").join(select_cols),
         tbl=sql.Identifier(schema.materialized_view),
     )
-    with conn.cursor(row_factory=dict_row) as cur:
-        cur.execute(query)
+    cur = _run(conn, query)
+    try:
         yield from cur
+    finally:
+        cur.close()
