@@ -69,6 +69,29 @@ def test_qualified_table_includes_schema():
     assert db._qualified(prov, prov.ca_table).as_string(None) == '"mdm_ca"."corporate_actions_bb"'
 
 
+def test_attributes_query_casts_value_and_excludes_object():
+    from analysis import schema as sc
+    naming = sc.Naming(
+        ca_table="corporate_actions_{provider}",
+        attribute_table="{type}_attribute_values_{provider}",
+        materialized_view="mv_{provider}",
+        attribute_types=["date", "int", "string", "decimal", "object"],
+        ca_id="{provider}_ca_id",
+        db_schema="mdm_ca",
+    )
+    prov = sc.build_provider_schema("bb", naming)
+    query, params = db._attributes_query(prov, ["CP_STOCK_OPT"])
+    text = query.as_string(None)
+
+    # value cast to text so the UNION of differently-typed tables is valid
+    assert 'CAST("value" AS text)' in text
+    # one branch per matchable typed table; object is excluded
+    assert text.count("UNION ALL") == 3          # 4 tables -> 3 joins
+    assert "object_attribute_values_bb" not in text
+    assert '"mdm_ca"."int_attribute_values_bb"' in text
+    assert params == [["CP_STOCK_OPT"]] * 4
+
+
 def test_session_statements_inline_timeout_no_bind_params():
     # SET rejects bind parameters ($1); the timeout must be inlined as a literal.
     texts = [s.as_string(None) for s in db._session_statements(30000)]

@@ -107,18 +107,16 @@ def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
         cur.close()
 
 
-def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
-    """Yield {ca_id, attribute, value} across the matchable typed tables,
-    restricted to the attributes the ruleset actually references."""
-    wanted: List[str] = list(columns)
-    if not wanted:
-        return
-
+def _attributes_query(schema: ProviderSchema, wanted: List[str]):
+    """Build the UNION-ALL over the typed attribute tables. `value` is cast to
+    text in every branch — the columns have different types (date/int/numeric/
+    varchar) and UNION requires one common type; text also matches how the
+    tolerant comparator treats values."""
     parts, params = [], []
     for table_name in schema.matchable_attribute_tables().values():
         parts.append(
             sql.SQL(
-                "SELECT {ca} AS ca_id, {attr} AS attribute, {val} AS value "
+                "SELECT {ca} AS ca_id, {attr} AS attribute, CAST({val} AS text) AS value "
                 "FROM {tbl} WHERE {attr} = ANY(%s)"
             ).format(
                 ca=sql.Identifier(schema.ca_id),
@@ -128,8 +126,17 @@ def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> It
             )
         )
         params.append(wanted)
+    return sql.SQL(" UNION ALL ").join(parts), params
 
-    query = sql.SQL(" UNION ALL ").join(parts)
+
+def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
+    """Yield {ca_id, attribute, value} across the matchable typed tables,
+    restricted to the attributes the ruleset actually references."""
+    wanted: List[str] = list(columns)
+    if not wanted:
+        return
+
+    query, params = _attributes_query(schema, wanted)
     cur = _run(conn, query, params)
     try:
         yield from cur
