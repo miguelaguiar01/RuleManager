@@ -24,6 +24,24 @@ def test_templating_renders_all_names():
     assert set(s.attribute_tables) == {"date", "int", "string", "decimal", "object"}
 
 
+def test_schema_defaults_to_public():
+    s = build_provider_schema("bb", _naming())
+    assert s.db_schema == "public"
+
+
+def test_schema_from_config():
+    n = Naming(
+        ca_table="ca_{provider}",
+        attribute_table="{type}_attrs_{provider}",
+        materialized_view="mv_{provider}",
+        attribute_types=["int"],
+        ca_id="{provider}_ca_id",
+        db_schema="mdm_ca",
+    )
+    s = build_provider_schema("bb", n)
+    assert s.db_schema == "mdm_ca"
+
+
 def test_object_excluded_from_matchable_tables():
     s = build_provider_schema("wm", _naming())
     assert "object" not in s.matchable_attribute_tables()

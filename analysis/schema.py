@@ -45,6 +45,7 @@ class Naming:
     swift_code: str = "swift_code"
     attribute_name: str = "attribute"
     attribute_value: str = "value"
+    db_schema: str = "public"   # Postgres schema/namespace the tables live in
 
     @staticmethod
     def from_dict(naming: Dict, columns: Dict) -> "Naming":
@@ -59,6 +60,7 @@ class Naming:
                 swift_code=columns.get("swift_code", "swift_code"),
                 attribute_name=columns.get("attribute_name", "attribute"),
                 attribute_value=columns.get("attribute_value", "value"),
+                db_schema=naming.get("schema", "public"),
             )
         except KeyError as exc:
             raise ConfigError(f"Missing config key: {exc}") from exc
@@ -75,6 +77,7 @@ class ProviderSchema:
     swift_code: str
     attribute_name: str
     attribute_value: str
+    db_schema: str = "public"
     attribute_tables: Dict[str, str] = field(default_factory=dict)
 
     def matchable_attribute_tables(self) -> Dict[str, str]:
@@ -87,6 +90,7 @@ def build_provider_schema(provider: str, naming: Naming) -> ProviderSchema:
     """Render + validate every identifier for one provider."""
     validate_identifier(provider, "provider")
 
+    db_schema = validate_identifier(_render(naming.db_schema, provider=provider), "schema")
     ca_table = validate_identifier(_render(naming.ca_table, provider=provider), "ca_table")
     mv = validate_identifier(_render(naming.materialized_view, provider=provider), "materialized_view")
     ca_id = validate_identifier(_render(naming.ca_id, provider=provider), "ca_id")
@@ -102,6 +106,7 @@ def build_provider_schema(provider: str, naming: Naming) -> ProviderSchema:
         ca_table=ca_table,
         materialized_view=mv,
         ca_id=ca_id,
+        db_schema=db_schema,
         mnemonic=validate_identifier(naming.mnemonic, "mnemonic"),
         swift_code=validate_identifier(naming.swift_code, "swift_code"),
         attribute_name=validate_identifier(naming.attribute_name, "attribute_name"),

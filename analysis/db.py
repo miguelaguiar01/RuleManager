@@ -47,6 +47,11 @@ def _run(conn, query, params=None):
     return cur
 
 
+def _qualified(schema: ProviderSchema, table: str):
+    """Schema-qualified table reference: "db_schema"."table"."""
+    return sql.Identifier(schema.db_schema, table)
+
+
 def _connection_params(conn_cfg: Dict):
     """Split a [connection] block into (dsn, libpq kwargs), ignoring our own
     non-libpq keys (e.g. statement_timeout_ms)."""
@@ -93,7 +98,7 @@ def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
         ca=sql.Identifier(schema.ca_id),
         mn=sql.Identifier(schema.mnemonic),
         sw=sql.Identifier(schema.swift_code),
-        tbl=sql.Identifier(schema.ca_table),
+        tbl=_qualified(schema, schema.ca_table),
     )
     cur = _run(conn, query)
     try:
@@ -119,7 +124,7 @@ def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> It
                 ca=sql.Identifier(schema.ca_id),
                 attr=sql.Identifier(schema.attribute_name),
                 val=sql.Identifier(schema.attribute_value),
-                tbl=sql.Identifier(table_name),
+                tbl=_qualified(schema, table_name),
             )
         )
         params.append(wanted)
@@ -151,7 +156,7 @@ def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[D
 
     query = sql.SQL("SELECT {cols} FROM {tbl}").format(
         cols=sql.SQL(", ").join(select_cols),
-        tbl=sql.Identifier(schema.materialized_view),
+        tbl=_qualified(schema, schema.materialized_view),
     )
     cur = _run(conn, query)
     try:

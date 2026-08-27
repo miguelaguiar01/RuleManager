@@ -55,6 +55,20 @@ def test_connection_params_service():
     assert kwargs == {"service": "mysvc"}
 
 
+def test_qualified_table_includes_schema():
+    from analysis import schema as sc
+    naming = sc.Naming(
+        ca_table="corporate_actions_{provider}",
+        attribute_table="{type}_attribute_values_{provider}",
+        materialized_view="mv_{provider}",
+        attribute_types=["int"],
+        ca_id="{provider}_ca_id",
+        db_schema="mdm_ca",
+    )
+    prov = sc.build_provider_schema("bb", naming)
+    assert db._qualified(prov, prov.ca_table).as_string(None) == '"mdm_ca"."corporate_actions_bb"'
+
+
 def test_session_statements_inline_timeout_no_bind_params():
     # SET rejects bind parameters ($1); the timeout must be inlined as a literal.
     texts = [s.as_string(None) for s in db._session_statements(30000)]

@@ -39,6 +39,7 @@ statement_timeout_ms = 30000
 # and refuses to execute any statement that isn't a plain read.
 
 [naming]
+schema            = "REPLACE_ME_schema"   # Postgres schema the tables live in (e.g. mdm_ca); defaults to public if omitted
 ca_table          = "REPLACE_ME_ca_{provider}"
 attribute_table   = "REPLACE_ME_{type}_attrs_{provider}"
 materialized_view = "REPLACE_ME_mv_{provider}"
