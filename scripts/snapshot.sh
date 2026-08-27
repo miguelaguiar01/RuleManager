@@ -43,6 +43,7 @@ TARGET_DB=${TARGET_DB:-$SRC_DB}
 JOBS=${JOBS:-4}
 LOCAL_POD=${LOCAL_POD:-}
 LOCAL_SELECTOR=${LOCAL_SELECTOR:-}
+LOCAL_PGPASSWORD=${LOCAL_PGPASSWORD:-}
 
 command -v kubectl >/dev/null || { echo "ERROR: 'kubectl' not found." >&2; exit 1; }
 
@@ -118,6 +119,12 @@ fi
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" get pod "$LOCAL_POD" >/dev/null \
     || { echo "ERROR: local pod '$LOCAL_POD' not found in '$LOCAL_NS' on '$RESTORE_CONTEXT'." >&2; exit 1; }
 
+# resolve the local superuser password (from a local secret, unless set directly)
+if [ -z "$LOCAL_PGPASSWORD" ] && [ -n "${LOCAL_SECRET:-}" ] && [ -n "${LOCAL_SECRET_KEY:-}" ]; then
+    LOCAL_PGPASSWORD=$(kubectl --context "$RESTORE_CONTEXT" -n "${LOCAL_SECRET_NS:-$LOCAL_NS}" \
+        get secret "$LOCAL_SECRET" -o "jsonpath={.data.${LOCAL_SECRET_KEY}}" | base64 -d)
+fi
+
 echo "==> [2/4] Copying dump into ${RESTORE_CONTEXT}:${LOCAL_NS}/${LOCAL_POD} ..."
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" cp "$LOCAL_DUMP" "$LOCAL_POD:$POD_DUMP"
 
@@ -129,18 +136,21 @@ if [ "$NOW_CTX" != "$RESTORE_CONTEXT" ] || [ "$NOW_CTX" = "$DUMP_CONTEXT" ]; the
 fi
 echo "==> [3/4] Recreating ${TARGET_DB} on ${NOW_CTX}:${LOCAL_NS}/${LOCAL_POD} (drop + create) ..."
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-    psql -U "$LOCAL_SUPERUSER" -d postgres -v ON_ERROR_STOP=1 \
+    env PGPASSWORD="$LOCAL_PGPASSWORD" \
+    psql -w -U "$LOCAL_SUPERUSER" -d postgres -v ON_ERROR_STOP=1 \
     -c "DROP DATABASE IF EXISTS \"$TARGET_DB\" WITH (FORCE);" \
     -c "CREATE DATABASE \"$TARGET_DB\";"
 
 echo "==> [4/4] Restoring snapshot (schema, data, indexes, constraints, matviews) ..."
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
+    env PGPASSWORD="$LOCAL_PGPASSWORD" \
     pg_restore -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges -j "$JOBS" "$POD_DUMP"
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- rm -f "$POD_DUMP" || true
 
 count_schema=${SRC_SCHEMA:-public}
 tables=$(kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-    psql -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" -tAc \
+    env PGPASSWORD="$LOCAL_PGPASSWORD" \
+    psql -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" -tAc \
     "SELECT count(*) FROM information_schema.tables WHERE table_schema = '$count_schema';" | tr -d '[:space:]')
 
 echo "OK Snapshot ready on ${RESTORE_CONTEXT}: ${TARGET_DB} — ${tables} tables in schema '${count_schema}'."
