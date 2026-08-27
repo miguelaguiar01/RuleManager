@@ -90,21 +90,43 @@ def _session_statements(timeout_ms: int):
     ]
 
 
-def _base_query(schema: ProviderSchema):
-    """Base CA query. mnemonic is selected only if this provider has one."""
-    cols = [sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id))]
-    if schema.mnemonic:
-        cols.append(sql.SQL("{} AS mnemonic").format(sql.Identifier(schema.mnemonic)))
-    cols.append(sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)))
+def _table_columns(conn, schema: ProviderSchema, table: str) -> List[str]:
+    """The real column names of a table, from information_schema."""
+    query = sql.SQL(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = %s AND table_name = %s"
+    )
+    cur = _run(conn, query, (schema.db_schema, table))
+    try:
+        return [row["column_name"] for row in cur]
+    finally:
+        cur.close()
+
+
+def _base_query(schema: ProviderSchema, present_columns: Iterable[str], ruleset_columns: Iterable[str]):
+    """Base CA query. Selects ca_id + swift_code plus every ruleset column that
+    actually exists on the base table (matched case-insensitively, aliased back
+    to the rule column name). Rule columns not on the base table come from the
+    attribute tables instead."""
+    present_lower = {c.lower(): c for c in present_columns}
+    cols = [
+        sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id)),
+        sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)),
+    ]
+    for rule_col in sorted(set(ruleset_columns)):
+        real = present_lower.get(rule_col.lower())
+        if real and real not in (schema.ca_id, schema.swift_code):
+            cols.append(sql.SQL("{} AS {}").format(sql.Identifier(real), sql.Identifier(rule_col)))
     return sql.SQL("SELECT {cols} FROM {tbl}").format(
         cols=sql.SQL(", ").join(cols),
         tbl=_qualified(schema, schema.ca_table),
     )
 
 
-def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
-    """Yield {ca_id, [mnemonic,] swift_code} for every CA."""
-    cur = _run(conn, _base_query(schema))
+def fetch_base(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
+    """Yield {ca_id, swift_code, <base rule columns...>} for every CA."""
+    present = _table_columns(conn, schema, schema.ca_table)
+    cur = _run(conn, _base_query(schema, present, columns))
     try:
         yield from cur
     finally:
@@ -148,27 +170,27 @@ def fetch_attributes(conn, schema: ProviderSchema, columns: Iterable[str]) -> It
         cur.close()
 
 
-def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
-    """Yield one condensed row per CA from the materialized view. MV columns are
-    the lowercased rule column names; caller remaps them (records.build_records_from_mv)."""
-    lowers = []
-    for col in columns:
-        low = col.lower()
-        if low == schema.mnemonic:
-            continue  # selected explicitly below
-        lowers.append(validate_identifier(low, "mv_column"))
-
-    select_cols = [sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id))]
-    if schema.mnemonic:
-        select_cols.append(sql.SQL("{} AS mnemonic").format(sql.Identifier(schema.mnemonic)))
-    select_cols.append(sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)))
-    select_cols.extend(sql.Identifier(low) for low in lowers)
-
-    query = sql.SQL("SELECT {cols} FROM {tbl}").format(
+def _mv_query(schema: ProviderSchema, columns: Iterable[str]):
+    """MV query: ca_id + swift_code plus each ruleset column, lowercased (the MV
+    stores lowercase rule-column names); caller remaps them."""
+    reserved = {schema.ca_id.lower(), schema.swift_code.lower()}
+    select_cols = [
+        sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id)),
+        sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)),
+    ]
+    for col in sorted(set(columns)):
+        low = validate_identifier(col.lower(), "mv_column")
+        if low not in reserved:
+            select_cols.append(sql.Identifier(low))
+    return sql.SQL("SELECT {cols} FROM {tbl}").format(
         cols=sql.SQL(", ").join(select_cols),
         tbl=_qualified(schema, schema.materialized_view),
     )
-    cur = _run(conn, query)
+
+
+def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[Dict]:
+    """Yield one condensed row per CA from the materialized view."""
+    cur = _run(conn, _mv_query(schema, columns))
     try:
         yield from cur
     finally:

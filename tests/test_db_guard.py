@@ -107,17 +107,32 @@ def _schema_for(**col_overrides):
     return sc.build_provider_schema(provider, n)
 
 
-def test_base_query_includes_mnemonic_by_default():
-    text = db._base_query(_schema_for()).as_string(None)
-    assert '"mnemonic" AS mnemonic' in text
+def test_base_query_selects_present_rule_columns():
+    prov = _schema_for()  # bb, ca_id bb_ca_id
+    # base table has mnemonic + isin; rules reference mnemonic (base) and CP_STOCK_OPT (attribute)
+    text = db._base_query(prov, ["bb_ca_id", "mnemonic", "swift_code", "isin"],
+                          ["mnemonic", "CP_STOCK_OPT"]).as_string(None)
+    assert '"bb_ca_id" AS ca_id' in text and '"swift_code" AS swift_code' in text
+    assert '"mnemonic" AS "mnemonic"' in text       # base column pulled
+    assert "CP_STOCK_OPT" not in text               # not a base column -> comes from EAV
+    assert "isin" not in text                        # base column not referenced by rules
 
 
-def test_base_query_omits_absent_mnemonic():
-    prov = _schema_for(mnemonic="")     # provider with no mnemonic column (e.g. WM)
-    assert prov.mnemonic is None
-    text = db._base_query(prov).as_string(None)
+def test_base_query_matches_rule_columns_case_insensitively():
+    # WM: no mnemonic; rules reference CATEGORY which exists as base column "category"
+    prov = _schema_for(mnemonic="")
+    text = db._base_query(prov, ["wm_ca_id", "swift_code", "category", "isin"],
+                          ["CATEGORY", "CP_RATIO"]).as_string(None)
+    assert '"category" AS "CATEGORY"' in text        # matched case-insensitively, aliased to rule name
     assert "mnemonic" not in text
-    assert '"wm_ca_id" AS ca_id' in text and '"swift_code" AS swift_code' in text
+    assert '"wm_ca_id" AS ca_id' in text
+
+
+def test_mv_query_selects_lowercased_rule_columns():
+    prov = _schema_for()
+    text = db._mv_query(prov, ["CP_STOCK_OPT", "mnemonic"]).as_string(None)
+    assert '"cp_stock_opt"' in text and '"mnemonic"' in text
+    assert '"bb_ca_id" AS ca_id' in text and '"swift_code" AS swift_code' in text
 
 
 def test_session_statements_inline_timeout_no_bind_params():

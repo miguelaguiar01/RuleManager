@@ -25,20 +25,25 @@ def build_records_from_eav(
     attribute_rows: Iterable[Dict],
     *,
     ca_id_key: str = "ca_id",
-    mnemonic_key: str = "mnemonic",
     swift_code_key: str = "swift_code",
     attribute_key: str = "attribute",
     value_key: str = "value",
 ) -> Dict[Any, CARecord]:
-    """Reconstruct records by pivoting attribute rows onto their base CA."""
+    """Reconstruct records by pivoting attribute rows onto their base CA.
+
+    Every base-table column (other than the ca_id/swift_code keys) becomes a
+    field, keyed by the rule column name the query aliased it to. A NULL/absent
+    value is left out so it reads as MISSING. Attribute rows add the rest.
+    """
     records: Dict[Any, CARecord] = {}
 
     for row in base_rows:
         cid = row[ca_id_key]
-        fields = {}
-        mnemonic = row.get(mnemonic_key)
-        if mnemonic is not None:  # absent column or NULL -> leave MISSING
-            fields[mnemonic_key] = mnemonic
+        fields = {
+            key: value
+            for key, value in row.items()
+            if key not in (ca_id_key, swift_code_key) and value is not None
+        }
         records[cid] = CARecord(ca_id=cid, assigned_code=row.get(swift_code_key), fields=fields)
 
     for row in attribute_rows:

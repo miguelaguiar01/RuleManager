@@ -97,7 +97,7 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
     integrity_report = None
 
     if args.source in ("eav", "both"):
-        base = list(db.fetch_base(conn, schema))
+        base = list(db.fetch_base(conn, schema, columns))
         attrs = list(db.fetch_attributes(conn, schema, columns))
         eav_records = rec.build_records_from_eav(base, attrs)
         summary, realized = _audit(console, "eav", eav_records, rules, overlaps, args.examples)
