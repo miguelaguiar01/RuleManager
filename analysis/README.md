@@ -97,7 +97,7 @@ constraints, matviews).
 
 ```bash
 cp scripts/snapshot.env.example scripts/snapshot.env   # fill in (gitignored)
-alias ca-snapshot='bash ~/RuleManager/scripts/snapshot.sh'
+alias ca-snapshot='sh ~/RuleManager/scripts/snapshot.sh'
 ca-snapshot                                            # rebuild local copy any time
 ```
 
