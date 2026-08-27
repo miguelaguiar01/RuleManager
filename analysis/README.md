@@ -68,6 +68,24 @@ uv run audit.py --provider bb --export exports/audit_bb.json
 - Omitting `--provider` runs every configured provider; with `--export`, the
   provider name is appended to each filename automatically.
 
+### Hand a report to a business analyst
+
+```bash
+uv run audit.py --provider bb --source both --report exports/
+```
+
+`--report DIR` writes a shareable bundle per provider into `DIR`:
+- `bb_audit.html` — self-contained overview (summary tiles, realized ambiguity,
+  resolution audit with inconsistency flags, gap/conformance samples, MV-vs-EAV
+  integrity). Opens in any browser, safe to email.
+- `bb_eav_coverage_gaps.csv`, `bb_eav_ambiguous.csv`, `bb_eav_conformance.csv`,
+  `bb_eav_integrity_mismatches.csv` — the **full** ca_id lists (not the capped
+  samples), for slicing in Excel.
+- `bb_audit.json` — the machine-readable version.
+
+`exports/` is gitignored; the CSVs/HTML contain real ca_ids, so keep them on
+the laptop / internal channels.
+
 ## Notes / current limits
 
 - Missing attributes follow **SQL-NULL semantics**: any comparison on an absent

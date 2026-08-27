@@ -12,6 +12,7 @@ The ruleset path comes from [providers.<provider>].rules (override with
 (override per provider under [providers.<provider>]).
 """
 import argparse
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, List
 
@@ -19,7 +20,7 @@ from rich.console import Console
 
 import rule_manager
 
-from . import analyses, records as rec, report
+from . import analyses, records as rec, report, report_html
 from .matcher import ruleset_columns
 from .schema import (
     build_provider_schema,
@@ -40,6 +41,8 @@ def parse_args(argv=None):
                    help="Records from the attribute tables (eav), the materialized view (mv), or both")
     p.add_argument("--export", help="Write findings as JSON here (use exports/ — gitignored). "
                                     "With multiple providers the provider is appended to the filename.")
+    p.add_argument("--report", help="Write a BA-ready bundle (HTML overview + full CSVs + JSON) "
+                                    "into this directory (use exports/ — gitignored).")
     p.add_argument("--examples", type=int, default=analyses.EXAMPLES, help="Max example ca_ids kept per finding")
     p.add_argument("--counts-only", action="store_true", help="Drop example ca_ids from the export")
     return p.parse_args(argv)
@@ -75,7 +78,7 @@ def _audit(console: Console, source_name: str, records_map: Dict, rules: Dict, o
     realized = analyses.realized_for_overlaps(evaluated, overlaps, examples=examples)
     report.render_summary(console, summary)
     report.render_realized(console, realized)
-    return summary, realized
+    return summary, realized, evaluated
 
 
 def _run_provider(console: Console, conn, config: Dict, provider: str, args, multi: bool):
@@ -92,7 +95,7 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
                   f"{len(rules)} rules, {len(columns)} columns, {len(overlaps)} flagged overlaps "
                   f"[dim]({rules_path})[/dim]")
 
-    summaries, realized_by_source = [], {}
+    summaries, realized_by_source, eval_by_source = [], {}, {}
     eav_records = mv_records = None
     integrity_report = None
 
@@ -100,16 +103,18 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
         base = list(db.fetch_base(conn, schema, columns))
         attrs = list(db.fetch_attributes(conn, schema, columns))
         eav_records = rec.build_records_from_eav(base, attrs)
-        summary, realized = _audit(console, "eav", eav_records, rules, overlaps, args.examples)
+        summary, realized, evaluated = _audit(console, "eav", eav_records, rules, overlaps, args.examples)
         summaries.append(summary)
         realized_by_source["eav"] = realized
+        eval_by_source["eav"] = evaluated
 
     if args.source in ("mv", "both"):
         mv_rows = list(db.fetch_mv(conn, schema, columns))
         mv_records = rec.build_records_from_mv(mv_rows, columns)
-        summary, realized = _audit(console, "mv", mv_records, rules, overlaps, args.examples)
+        summary, realized, evaluated = _audit(console, "mv", mv_records, rules, overlaps, args.examples)
         summaries.append(summary)
         realized_by_source["mv"] = realized
+        eval_by_source["mv"] = evaluated
 
     if args.source == "both" and eav_records is not None and mv_records is not None:
         integrity_report = analyses.integrity(eav_records, mv_records, columns)
@@ -121,6 +126,31 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
                                        counts_only=args.counts_only)
         report.export_json(path, payload)
         console.print(f"[green]✓ Wrote {path}[/green]")
+
+    if args.report:
+        meta = {
+            "provider": provider,
+            "rules_path": rules_path,
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+            "sources": list(eval_by_source),
+            "rule_count": len(rules),
+            "overlap_count": len(overlaps),
+        }
+        out = Path(args.report)
+        out.mkdir(parents=True, exist_ok=True)
+
+        html = report_html.render_html(meta, summaries, realized_by_source, integrity_report)
+        (out / f"{provider}_audit.html").write_text(html)
+
+        for source, evaluated in eval_by_source.items():
+            integ_rows = None
+            if source == "eav" and eav_records is not None and mv_records is not None:
+                integ_rows = analyses.iter_integrity_mismatches(eav_records, mv_records, columns)
+            report.write_csv_bundle(out, f"{provider}_{source}", evaluated, rules, integ_rows)
+
+        report.export_json(out / f"{provider}_audit.json",
+                           report.build_payload(summaries, realized_by_source, integrity_report))
+        console.print(f"[green]✓ Wrote BA report bundle to {out}/{provider}_audit.html (+ CSVs)[/green]")
 
 
 def main(argv=None):

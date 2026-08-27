@@ -136,10 +136,47 @@ def realized_for_overlaps(evaluated: List[EvaluatedRecord],
     return sorted(out, key=lambda d: -d["realized"])
 
 
+# --- full-list iterators (uncapped) — for CSV export / BA analysis ----------
+
+def iter_gaps(evaluated: List[EvaluatedRecord]):
+    """Every record that matches no code."""
+    return (ev for ev in evaluated if not ev.matched_codes)
+
+
+def iter_ambiguous(evaluated: List[EvaluatedRecord]):
+    """Every record that matches two or more codes."""
+    return (ev for ev in evaluated if len(ev.matched_codes) >= 2)
+
+
+def iter_conformance(evaluated: List[EvaluatedRecord], rules: Dict[str, Dict]):
+    """Every record whose assigned code it does not actually match."""
+    return (
+        ev for ev in evaluated
+        if ev.assigned_code and ev.assigned_code in rules
+        and ev.assigned_code not in ev.matched_codes
+    )
+
+
+def iter_integrity_mismatches(eav_records: Dict[Any, CARecord],
+                              mv_records: Dict[Any, CARecord],
+                              columns: Iterable[str]):
+    """Yield every field-level EAV-vs-MV disagreement (uncapped)."""
+    cols = sorted(set(columns))
+    for cid, erec in eav_records.items():
+        mrec = mv_records.get(cid)
+        if mrec is None:
+            continue
+        for col in cols:
+            ev = erec.fields.get(col, sem.MISSING)
+            mv = mrec.fields.get(col, sem.MISSING)
+            if not _integrity_equal(ev, mv):
+                yield {"ca_id": cid, "column": col, "eav": _show(ev), "mv": _show(mv)}
+
+
 def integrity(eav_records: Dict[Any, CARecord], mv_records: Dict[Any, CARecord],
               columns: Iterable[str], *, examples: int = 50) -> Dict:
     """Field-level agreement between the EAV reconstruction and the MV."""
-    cols = set(columns) | {"mnemonic"}
+    cols = set(columns)
     only_eav = [cid for cid in eav_records if cid not in mv_records]
     only_mv = [cid for cid in mv_records if cid not in eav_records]
 

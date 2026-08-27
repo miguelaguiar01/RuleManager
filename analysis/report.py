@@ -3,6 +3,7 @@
 Exports contain real corporate-action identifiers, so they are written under
 the gitignored `exports/` directory and can be reduced to counts-only.
 """
+import csv
 import json
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -11,6 +12,7 @@ from rich import box
 from rich.console import Console
 from rich.table import Table
 
+from . import analyses as _an
 from .analyses import AuditSummary
 
 
@@ -94,3 +96,46 @@ def export_json(path, payload: Dict) -> Path:
     with open(out, "w") as fh:
         json.dump(payload, fh, indent=2, default=str)
     return out
+
+
+def _write_csv(path: Path, headers: List[str], rows) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(headers)
+        writer.writerows(rows)
+    return path
+
+
+def write_csv_bundle(directory, prefix: str, evaluated: List, rules: Dict,
+                     integrity_rows=None) -> List[Path]:
+    """Full (uncapped) per-record CSVs for a source, for BAs to slice in Excel.
+
+    `evaluated` is the full EvaluatedRecord list; `integrity_rows` (optional) is
+    the full mismatch iterator from analyses.iter_integrity_mismatches.
+    """
+    directory = Path(directory)
+    written = []
+
+    written.append(_write_csv(
+        directory / f"{prefix}_coverage_gaps.csv",
+        ["ca_id", "assigned_code"],
+        ([ev.ca_id, ev.assigned_code] for ev in _an.iter_gaps(evaluated)),
+    ))
+    written.append(_write_csv(
+        directory / f"{prefix}_ambiguous.csv",
+        ["ca_id", "matched_codes", "assigned_code"],
+        ([ev.ca_id, " + ".join(ev.matched_codes), ev.assigned_code] for ev in _an.iter_ambiguous(evaluated)),
+    ))
+    written.append(_write_csv(
+        directory / f"{prefix}_conformance.csv",
+        ["ca_id", "assigned_code", "actually_matches"],
+        ([ev.ca_id, ev.assigned_code, " + ".join(ev.matched_codes)] for ev in _an.iter_conformance(evaluated, rules)),
+    ))
+    if integrity_rows is not None:
+        written.append(_write_csv(
+            directory / f"{prefix}_integrity_mismatches.csv",
+            ["ca_id", "column", "eav_value", "mv_value"],
+            ([m["ca_id"], m["column"], m["eav"], m["mv"]] for m in integrity_rows),
+        ))
+    return written
