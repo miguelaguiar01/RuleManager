@@ -55,9 +55,13 @@ if [ "$DUMP_CONTEXT" = "$RESTORE_CONTEXT" ]; then
     exit 1
 fi
 
-# The dump is streamed straight into pg_restore — no temp file, no kubectl cp.
+# rsync (via oc) is used for the transfer — reliable over a lossy exec channel.
+command -v oc >/dev/null || { echo "ERROR: 'oc' is required (used for 'oc rsync')." >&2; exit 1; }
+
+LOCAL_STAGE=
 ORIGINAL_CONTEXT=$(kubectl config current-context 2>/dev/null || true)
 cleanup() {
+    [ -n "${LOCAL_STAGE:-}" ] && rm -rf "$LOCAL_STAGE" 2>/dev/null || true
     [ -n "$ORIGINAL_CONTEXT" ] && kubectl config use-context "$ORIGINAL_CONTEXT" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT INT TERM
@@ -146,38 +150,46 @@ echo "    OK: '$TARGET_DB' exists and is empty."
 # binary archives (the exec stream closes before the last buffer flushes), which
 # is what gave "end of file". Writing a full file on the pod's disk, then copying
 # it with a byte-count check + retry, is reliable. The dump stays custom format.
-POD_DUMP=/tmp/ca-snapshot.dump
+# Stage the dump in a directory in each pod; rsync it pod -> laptop -> pod.
+# rsync checksums and retransmits, so it converges over the lossy exec channel
+# (plain 'kubectl exec | cat' dropped bytes non-deterministically).
+POD_DIR=/tmp/ca-snapshot.d
+DUMP_NAME=snapshot.dump
 schema_arg=
 [ -n "$SRC_SCHEMA" ] && schema_arg="-n $SRC_SCHEMA"
 
 echo "==> [3/4] Dumping ${label} to a file in ${SRC_NS}/${POD} ... (can take a while)"
 src_size=$(kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- \
     env PGPASSWORD="$PGPASSWORD" sh -c \
-    "pg_dump -h '$SRC_HOST' -p '$SRC_PORT' -U '$SRC_USER' -d '$SRC_DB' $schema_arg -Fc -f '$POD_DUMP' && wc -c < '$POD_DUMP'" \
+    "mkdir -p '$POD_DIR' && pg_dump -h '$SRC_HOST' -p '$SRC_PORT' -U '$SRC_USER' -d '$SRC_DB' $schema_arg -Fc -f '$POD_DIR/$DUMP_NAME' && wc -c < '$POD_DIR/$DUMP_NAME'" \
     | tr -d '[:space:]')
 { [ -n "$src_size" ] && [ "$src_size" -gt 0 ] 2>/dev/null; } \
     || { echo "ERROR: dump failed or is empty in the source pod." >&2; exit 1; }
-echo "    dumped ${src_size} bytes; transferring into the local pod (verified) ..."
+echo "    dumped ${src_size} bytes."
 
-transferred=0
-for attempt in 1 2 3; do
-    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- cat "$POD_DUMP" \
-      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- sh -c "cat > '$POD_DUMP'"
-    dst_size=$(kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
-        sh -c "wc -c < '$POD_DUMP'" | tr -d '[:space:]')
-    if [ "$dst_size" = "$src_size" ]; then transferred=1; break; fi
-    echo "    attempt ${attempt}: incomplete transfer (src=${src_size} dst=${dst_size}); retrying ..."
-done
-[ "$transferred" = "1" ] \
-    || { echo "ERROR: could not transfer a complete dump after 3 attempts (src=${src_size})." >&2; exit 1; }
+LOCAL_STAGE=$(mktemp -d "${TMPDIR:-/tmp}/ca-snapshot.XXXXXX")
+
+echo "    rsync: source pod -> laptop ..."
+oc rsync --context "$DUMP_CONTEXT" -n "$SRC_NS" --no-perms --compress "$POD:$POD_DIR/" "$LOCAL_STAGE/" >/dev/null
+local_size=$(wc -c < "$LOCAL_STAGE/$DUMP_NAME" | tr -d '[:space:]')
+[ "$local_size" = "$src_size" ] \
+    || { echo "ERROR: rsync to laptop incomplete (src=${src_size} laptop=${local_size})." >&2; exit 1; }
+
+echo "    rsync: laptop -> local pod ..."
+kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- mkdir -p "$POD_DIR"
+oc rsync --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" --no-perms --compress "$LOCAL_STAGE/" "$LOCAL_POD:$POD_DIR/" >/dev/null
+dst_size=$(kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
+    sh -c "wc -c < '$POD_DIR/$DUMP_NAME'" | tr -d '[:space:]')
+[ "$dst_size" = "$src_size" ] \
+    || { echo "ERROR: rsync into local pod incomplete (src=${src_size} dst=${dst_size})." >&2; exit 1; }
 echo "    transfer verified (${src_size} bytes). Restoring ..."
 
 kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
     env PGPASSWORD="$LOCAL_PGPASSWORD" \
-    pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges -j "$JOBS" "$POD_DUMP"
+    pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges -j "$JOBS" "$POD_DIR/$DUMP_NAME"
 
-kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- rm -f "$POD_DUMP" >/dev/null 2>&1 || true
-kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- rm -f "$POD_DUMP" >/dev/null 2>&1 || true
+kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- rm -rf "$POD_DIR" >/dev/null 2>&1 || true
+kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- rm -rf "$POD_DIR" >/dev/null 2>&1 || true
 
 echo "==> [4/4] Validating restore ..."
 count_schema=${SRC_SCHEMA:-public}
