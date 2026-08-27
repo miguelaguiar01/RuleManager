@@ -22,7 +22,7 @@ def test_eav_without_mnemonic_leaves_it_missing():
     # WM has no mnemonic column -> base rows carry none -> field stays absent.
     base = [{"ca_id": 1, "swift_code": "SPLR"}]
     attrs = [{"ca_id": 1, "attribute": "CP_RATIO", "value": "2"}]
-    out = build_records_from_eav(base, attrs)
+    out = rec.build_records_from_eav(base, attrs)
     assert "mnemonic" not in out[1].fields
     assert out[1].fields == {"CP_RATIO": "2"}
 
