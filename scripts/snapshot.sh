@@ -16,6 +16,10 @@
 #
 # Config: scripts/snapshot.env (gitignored). Copy the .example first.
 # Alias:  alias ca-snapshot='bash ~/RuleManager/scripts/snapshot.sh'
+
+# Re-exec under bash if launched with a POSIX/limited shell (sh/dash/busybox).
+# This script needs bash features: arrays, [[ ]], BASH_SOURCE, pipefail.
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
