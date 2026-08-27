@@ -1,0 +1,23 @@
+[project]
+name = "rule-manager"
+version = "0.1.0"
+description = "Corporate Action Swift Code Enrichment Rule Manager - TUI"
+requires-python = ">=3.9"
+dependencies = [
+    "rich>=13",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+]
+
+# Single-file script, not an installable package: `uv run rule_manager.py <FILE>`
+# and `uv run pytest` work without a build backend.
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -388,11 +388,15 @@ class RuleManager:
                     for req in required:
                         if req not in condition:
                             errors.append(f"{swift_code}[{i}]: Missing '{req}'")
+                    if "operator" in condition and condition["operator"] not in self.CANONICAL_OPERATORS:
+                        errors.append(f"{swift_code}[{i}]: Invalid operator {condition['operator']!r}")
                 else:
                     required = ["column", "operator", "value"]
                     for req in required:
                         if req not in condition:
                             errors.append(f"{swift_code}[{i}]: Missing '{req}'")
+                    if "operator" in condition and condition["operator"] not in self.CANONICAL_OPERATORS:
+                        errors.append(f"{swift_code}[{i}]: Invalid operator {condition['operator']!r}")
         
         return errors
     
@@ -471,7 +475,24 @@ class RuleManager:
             else:
                 # Leaf condition
                 conditions.append(condition)
-        
+
+        return conditions
+
+    def _extract_all_conditions(self, block: Dict) -> List[Dict]:
+        """Recursively collect every leaf condition from a block, regardless
+        of its logic (used by the comparison view to list an OR block's
+        conditions)."""
+        conditions = []
+
+        if "conditions" not in block:
+            return conditions
+
+        for condition in block["conditions"]:
+            if "logic" in condition:
+                conditions.extend(self._extract_all_conditions(condition))
+            else:
+                conditions.append(condition)
+
         return conditions
 
     def _paths_can_overlap(self, path1: List[Dict], path2: List[Dict]) -> bool:
@@ -518,6 +539,28 @@ class RuleManager:
         # The paths COULD overlap (conservative approach)
         return True
 
+    # Canonical operators the comparison logic understands.
+    CANONICAL_OPERATORS = {"==", "!=", ">", "<", ">=", "<=", "in", "not in"}
+
+    @staticmethod
+    def _values_equal(a, b):
+        """Type-tolerant equality: exact, then numeric, then string.
+        Handles add_condition coercing scalars via int() (e.g. "07" -> 7)
+        while list values stay strings."""
+        if a == b:
+            return True
+        try:
+            return float(a) == float(b)
+        except (ValueError, TypeError):
+            pass
+        return str(a) == str(b)
+
+    @classmethod
+    def _value_in_list(cls, value, values):
+        return isinstance(values, list) and any(
+            cls._values_equal(value, item) for item in values
+        )
+
     def _are_contradictory(self, cond1: Dict, cond2: Dict) -> bool:
         """Check if two conditions on the same column are contradictory"""
         
@@ -557,7 +600,7 @@ class RuleManager:
         op2 = cond2.get("operator")
         val1 = cond1.get("value")
         val2 = cond2.get("value")
-        
+
         # Both equality checks with different values
         if op1 == "==" and op2 == "==":
             return val1 != val2
@@ -571,16 +614,33 @@ class RuleManager:
         # Equality vs "in" list
         if op1 == "==" and op2 == "in":
             if isinstance(val2, list):
-                return val1 not in val2
+                return not self._value_in_list(val1, val2)
         if op1 == "in" and op2 == "==":
             if isinstance(val1, list):
-                return val2 not in val1
+                return not self._value_in_list(val2, val1)
         
         # Both "in" lists with no overlap
         if op1 == "in" and op2 == "in":
             if isinstance(val1, list) and isinstance(val2, list):
                 return len(set(val1) & set(val2)) == 0
-        
+
+        # Equality vs "not in" list: contradictory if the value is excluded
+        if op1 == "==" and op2 == "not in":
+            if isinstance(val2, list):
+                return self._value_in_list(val1, val2)
+        if op1 == "not in" and op2 == "==":
+            if isinstance(val1, list):
+                return self._value_in_list(val2, val1)
+
+        # "in" list vs "not in" list: contradictory only if every allowed
+        # value is excluded (the in-set is a subset of the not-in set)
+        if op1 == "in" and op2 == "not in":
+            if isinstance(val1, list) and isinstance(val2, list):
+                return all(self._value_in_list(x, val2) for x in val1)
+        if op1 == "not in" and op2 == "in":
+            if isinstance(val1, list) and isinstance(val2, list):
+                return all(self._value_in_list(x, val1) for x in val2)
+
         # Numeric contradictions (only for value comparisons, not column comparisons)
         if op1 == ">" and op2 == "<":
             try:
