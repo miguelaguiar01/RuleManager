@@ -90,14 +90,17 @@ fi
 [ -n "$PGPASSWORD" ] || { echo "ERROR: resolved password is empty (wrong SECRET_KEY?)." >&2; exit 1; }
 export PGPASSWORD
 
-# optional schema flag, POSIX-style (no arrays): stash it in the positional params
-set --
-[ -n "$SRC_SCHEMA" ] && set -- -n "$SRC_SCHEMA"
 label="${SRC_DB}${SRC_SCHEMA:+ (schema $SRC_SCHEMA)}"
-
 echo "==> [1/4] Dumping ${label} from ${SRC_HOST} via ${SRC_NS}/${POD} ... (can take a while)"
-kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
-    pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" "$@" -Fc > "$LOCAL_DUMP"
+
+# Branch on the optional schema flag (no arrays / no 'set --', for max shell portability).
+if [ -n "$SRC_SCHEMA" ]; then
+    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
+        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -n "$SRC_SCHEMA" -Fc > "$LOCAL_DUMP"
+else
+    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
+        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -Fc > "$LOCAL_DUMP"
+fi
 [ -s "$LOCAL_DUMP" ] || { echo "ERROR: dump is empty — check credentials / schema name." >&2; exit 1; }
 echo "    dump size: $(du -h "$LOCAL_DUMP" | cut -f1)"
 
