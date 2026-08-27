@@ -141,21 +141,43 @@ pre=$(local_psql -d "$TARGET_DB" -tAc \
     || { echo "ERROR: '$TARGET_DB' is not empty (${pre} tables) after recreate — aborting." >&2; exit 1; }
 echo "    OK: '$TARGET_DB' exists and is empty."
 
-# ---- stream the custom-format dump straight into pg_restore ---------------
-# No intermediate file, no 'kubectl cp', no parallel -j — those corrupted the
-# 339M archive. A single -Fc stream, restored in one pass.
-echo "==> [3/4] Streaming ${label} from ${SRC_HOST} into ${TARGET_DB} ... (can take a while)"
-if [ -n "$SRC_SCHEMA" ]; then
-    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
-        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -n "$SRC_SCHEMA" -Fc \
-      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- env PGPASSWORD="$LOCAL_PGPASSWORD" \
-        pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges
-else
-    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- env PGPASSWORD="$PGPASSWORD" \
-        pg_dump -h "$SRC_HOST" -p "$SRC_PORT" -U "$SRC_USER" -d "$SRC_DB" -Fc \
-      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- env PGPASSWORD="$LOCAL_PGPASSWORD" \
-        pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges
-fi
+# ---- dump to a COMPLETE file in the source pod, transfer it verified, restore
+# Streaming pg_dump straight through 'kubectl exec' truncates the tail of large
+# binary archives (the exec stream closes before the last buffer flushes), which
+# is what gave "end of file". Writing a full file on the pod's disk, then copying
+# it with a byte-count check + retry, is reliable. The dump stays custom format.
+POD_DUMP=/tmp/ca-snapshot.dump
+schema_arg=
+[ -n "$SRC_SCHEMA" ] && schema_arg="-n $SRC_SCHEMA"
+
+echo "==> [3/4] Dumping ${label} to a file in ${SRC_NS}/${POD} ... (can take a while)"
+src_size=$(kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- \
+    env PGPASSWORD="$PGPASSWORD" sh -c \
+    "pg_dump -h '$SRC_HOST' -p '$SRC_PORT' -U '$SRC_USER' -d '$SRC_DB' $schema_arg -Fc -f '$POD_DUMP' && wc -c < '$POD_DUMP'" \
+    | tr -d '[:space:]')
+{ [ -n "$src_size" ] && [ "$src_size" -gt 0 ] 2>/dev/null; } \
+    || { echo "ERROR: dump failed or is empty in the source pod." >&2; exit 1; }
+echo "    dumped ${src_size} bytes; transferring into the local pod (verified) ..."
+
+transferred=0
+for attempt in 1 2 3; do
+    kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- cat "$POD_DUMP" \
+      | kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec -i "$LOCAL_POD" -- sh -c "cat > '$POD_DUMP'"
+    dst_size=$(kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
+        sh -c "wc -c < '$POD_DUMP'" | tr -d '[:space:]')
+    if [ "$dst_size" = "$src_size" ]; then transferred=1; break; fi
+    echo "    attempt ${attempt}: incomplete transfer (src=${src_size} dst=${dst_size}); retrying ..."
+done
+[ "$transferred" = "1" ] \
+    || { echo "ERROR: could not transfer a complete dump after 3 attempts (src=${src_size})." >&2; exit 1; }
+echo "    transfer verified (${src_size} bytes). Restoring ..."
+
+kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- \
+    env PGPASSWORD="$LOCAL_PGPASSWORD" \
+    pg_restore -w -U "$LOCAL_SUPERUSER" -d "$TARGET_DB" --no-owner --no-privileges -j "$JOBS" "$POD_DUMP"
+
+kubectl --context "$DUMP_CONTEXT" -n "$SRC_NS" exec "$POD" -- rm -f "$POD_DUMP" >/dev/null 2>&1 || true
+kubectl --context "$RESTORE_CONTEXT" -n "$LOCAL_NS" exec "$LOCAL_POD" -- rm -f "$POD_DUMP" >/dev/null 2>&1 || true
 
 echo "==> [4/4] Validating restore ..."
 count_schema=${SRC_SCHEMA:-public}
