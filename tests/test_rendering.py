@@ -39,6 +39,23 @@ def test_build_comparison_tree_happy_path(manager):
     assert "ROOT" in text and "Path 1" in text
 
 
+def test_display_overlap_details_runs(make_manager):
+    # The validate/test screen's side-by-side panels must render without error.
+    m = make_manager({
+        "DVCA": {"DEPENDENCIES": [], "filters": [block("and", leaf("mnemonic", "==", "DVD_CASH"))]},
+        "TEND": {"DEPENDENCIES": [], "filters": [block("and", leaf("mnemonic", "==", "DVD_CASH"))]},
+    })
+    m._display_overlap_details("DVCA", "TEND")  # must not raise
+
+
+def test_compare_swift_codes_runs(make_manager):
+    m = make_manager({
+        "DVCA": {"DEPENDENCIES": ["A"], "filters": [block("or", leaf("mnemonic", "==", "DVD_CASH"))]},
+        "TEND": {"DEPENDENCIES": ["A", "B"], "filters": [block("or", leaf("mnemonic", "==", "DVD_CASH"))]},
+    })
+    rm.compare_swift_codes(m, "DVCA", "TEND")  # must not raise
+
+
 def test_build_comparison_tree_with_or_block(manager):
     # A top-level path that is an OR block routes through _extract_all_conditions.
     filters = block("or", block("or", leaf("a", "==", "1"), leaf("b", "==", "2")))

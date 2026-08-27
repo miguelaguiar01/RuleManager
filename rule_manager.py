@@ -790,10 +790,13 @@ class RuleManager:
                 padding=(0, 1)
             )
             
-            # Display columns
-            columns = Columns([panel1, panel2], equal=True, expand=True)
-            console.print(columns)
-            
+            # Display panels flush side-by-side, each filling half the width
+            grid = Table.grid(expand=True, padding=(0, 2))
+            grid.add_column(ratio=1)
+            grid.add_column(ratio=1)
+            grid.add_row(panel1, panel2)
+            console.print(grid)
+
             # Show why they overlap
             console.print(f"  [dim]→ These paths could both match the same corporate action[/dim]")
         
@@ -1142,10 +1145,13 @@ def compare_swift_codes(manager: RuleManager, code1: str, code2: str):
         padding=(1, 2)
     )
     
-    columns = Columns([panel1, panel2], equal=True, expand=True)
-    console.print(columns)
+    grid = Table.grid(expand=True, padding=(0, 2))
+    grid.add_column(ratio=1)
+    grid.add_column(ratio=1)
+    grid.add_row(panel1, panel2)
+    console.print(grid)
     console.print()
-    
+
     # 3. Summary of differences
     console.print("[bold yellow]Summary:[/bold yellow]")
     
