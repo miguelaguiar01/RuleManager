@@ -64,6 +64,8 @@ rules = "REPLACE_ME/enrichment_calculation_rules_bb.json"
 
 [providers.wm]
 rules = "REPLACE_ME/enrichment_calculation_rules_wm.json"
-# Example per-provider override (delete if not needed):
+# Per-provider override example: WM's CA table has no `mnemonic` column, so
+# set it empty to skip selecting it (rules referencing it read as missing).
 # [providers.wm.columns]
+# mnemonic = ""
 # ca_id = "wm_ca_id"

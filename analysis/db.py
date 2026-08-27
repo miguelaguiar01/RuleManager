@@ -90,17 +90,21 @@ def _session_statements(timeout_ms: int):
     ]
 
 
-def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
-    """Yield {ca_id, mnemonic, swift_code} for every CA."""
-    query = sql.SQL(
-        "SELECT {ca} AS ca_id, {mn} AS mnemonic, {sw} AS swift_code FROM {tbl}"
-    ).format(
-        ca=sql.Identifier(schema.ca_id),
-        mn=sql.Identifier(schema.mnemonic),
-        sw=sql.Identifier(schema.swift_code),
+def _base_query(schema: ProviderSchema):
+    """Base CA query. mnemonic is selected only if this provider has one."""
+    cols = [sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id))]
+    if schema.mnemonic:
+        cols.append(sql.SQL("{} AS mnemonic").format(sql.Identifier(schema.mnemonic)))
+    cols.append(sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)))
+    return sql.SQL("SELECT {cols} FROM {tbl}").format(
+        cols=sql.SQL(", ").join(cols),
         tbl=_qualified(schema, schema.ca_table),
     )
-    cur = _run(conn, query)
+
+
+def fetch_base(conn, schema: ProviderSchema) -> Iterator[Dict]:
+    """Yield {ca_id, [mnemonic,] swift_code} for every CA."""
+    cur = _run(conn, _base_query(schema))
     try:
         yield from cur
     finally:
@@ -154,11 +158,10 @@ def fetch_mv(conn, schema: ProviderSchema, columns: Iterable[str]) -> Iterator[D
             continue  # selected explicitly below
         lowers.append(validate_identifier(low, "mv_column"))
 
-    select_cols = [
-        sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id)),
-        sql.SQL("{} AS mnemonic").format(sql.Identifier(schema.mnemonic)),
-        sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)),
-    ]
+    select_cols = [sql.SQL("{} AS ca_id").format(sql.Identifier(schema.ca_id))]
+    if schema.mnemonic:
+        select_cols.append(sql.SQL("{} AS mnemonic").format(sql.Identifier(schema.mnemonic)))
+    select_cols.append(sql.SQL("{} AS swift_code").format(sql.Identifier(schema.swift_code)))
     select_cols.extend(sql.Identifier(low) for low in lowers)
 
     query = sql.SQL("SELECT {cols} FROM {tbl}").format(

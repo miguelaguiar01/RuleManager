@@ -18,6 +18,15 @@ def test_build_records_from_eav_pivots_attributes():
     assert out[2].fields["CP_RATIO"] == 2
 
 
+def test_eav_without_mnemonic_leaves_it_missing():
+    # WM has no mnemonic column -> base rows carry none -> field stays absent.
+    base = [{"ca_id": 1, "swift_code": "SPLR"}]
+    attrs = [{"ca_id": 1, "attribute": "CP_RATIO", "value": "2"}]
+    out = build_records_from_eav(base, attrs)
+    assert "mnemonic" not in out[1].fields
+    assert out[1].fields == {"CP_RATIO": "2"}
+
+
 def test_eav_attribute_without_base_row_is_kept():
     out = rec.build_records_from_eav([], [{"ca_id": 9, "attribute": "X", "value": "1"}])
     assert out[9].assigned_code is None

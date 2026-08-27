@@ -35,11 +35,11 @@ def build_records_from_eav(
 
     for row in base_rows:
         cid = row[ca_id_key]
-        records[cid] = CARecord(
-            ca_id=cid,
-            assigned_code=row.get(swift_code_key),
-            fields={mnemonic_key: row.get(mnemonic_key)},
-        )
+        fields = {}
+        mnemonic = row.get(mnemonic_key)
+        if mnemonic is not None:  # absent column or NULL -> leave MISSING
+            fields[mnemonic_key] = mnemonic
+        records[cid] = CARecord(ca_id=cid, assigned_code=row.get(swift_code_key), fields=fields)
 
     for row in attribute_rows:
         cid = row[ca_id_key]

@@ -8,7 +8,7 @@ before use, so a malformed or malicious config can never inject SQL.
 """
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Postgres unquoted identifier, lowercased. Templates may also contain the
 # placeholders {provider} and {type}, which are substituted before validation.
@@ -73,7 +73,7 @@ class ProviderSchema:
     ca_table: str
     materialized_view: str
     ca_id: str
-    mnemonic: str
+    mnemonic: Optional[str]   # None if this provider's CA table has no mnemonic column
     swift_code: str
     attribute_name: str
     attribute_value: str
@@ -101,13 +101,18 @@ def build_provider_schema(provider: str, naming: Naming) -> ProviderSchema:
         name = _render(naming.attribute_table, provider=provider, type=attr_type)
         attribute_tables[attr_type] = validate_identifier(name, "attribute_table")
 
+    # mnemonic is optional: a provider whose CA table has no mnemonic column
+    # (e.g. WM) sets columns.mnemonic = "" -> None here, and it is simply not
+    # selected. Any rule referencing it then reads as MISSING (SQL-NULL).
+    mnemonic = validate_identifier(naming.mnemonic, "mnemonic") if naming.mnemonic else None
+
     return ProviderSchema(
         provider=provider,
         ca_table=ca_table,
         materialized_view=mv,
         ca_id=ca_id,
         db_schema=db_schema,
-        mnemonic=validate_identifier(naming.mnemonic, "mnemonic"),
+        mnemonic=mnemonic,
         swift_code=validate_identifier(naming.swift_code, "swift_code"),
         attribute_name=validate_identifier(naming.attribute_name, "attribute_name"),
         attribute_value=validate_identifier(naming.attribute_value, "attribute_value"),

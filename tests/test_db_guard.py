@@ -92,6 +92,34 @@ def test_attributes_query_casts_value_and_excludes_object():
     assert params == [["CP_STOCK_OPT"]] * 4
 
 
+def _schema_for(**col_overrides):
+    from analysis import schema as sc
+    n = sc.Naming(
+        ca_table="corporate_actions_{provider}",
+        attribute_table="{type}_attribute_values_{provider}",
+        materialized_view="mv_{provider}",
+        attribute_types=["int", "string"],
+        ca_id="{provider}_ca_id",
+        db_schema="mdm_ca",
+        **col_overrides,
+    )
+    provider = "wm" if col_overrides.get("mnemonic") == "" else "bb"
+    return sc.build_provider_schema(provider, n)
+
+
+def test_base_query_includes_mnemonic_by_default():
+    text = db._base_query(_schema_for()).as_string(None)
+    assert '"mnemonic" AS mnemonic' in text
+
+
+def test_base_query_omits_absent_mnemonic():
+    prov = _schema_for(mnemonic="")     # provider with no mnemonic column (e.g. WM)
+    assert prov.mnemonic is None
+    text = db._base_query(prov).as_string(None)
+    assert "mnemonic" not in text
+    assert '"wm_ca_id" AS ca_id' in text and '"swift_code" AS swift_code' in text
+
+
 def test_session_statements_inline_timeout_no_bind_params():
     # SET rejects bind parameters ($1); the timeout must be inlined as a literal.
     texts = [s.as_string(None) for s in db._session_statements(30000)]
