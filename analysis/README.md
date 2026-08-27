@@ -86,6 +86,25 @@ uv run audit.py --provider bb --source both --report exports/
 `exports/` is gitignored; the CSVs/HTML contain real ca_ids, so keep them on
 the laptop / internal channels.
 
+## Snapshotting a DB you can't reach directly
+
+If the target database is only reachable from inside the cluster (not from your
+laptop), don't tunnel or proxy — take a local snapshot through a pod that *can*
+reach it, and run the audit against that. `scripts/snapshot.sh` does it in one
+idempotent command: it streams `pg_dump` out of the pod, then drops + recreates
+a local Docker Postgres DB and restores everything (schema, data, indexes,
+constraints, matviews).
+
+```bash
+cp scripts/snapshot.env.example scripts/snapshot.env   # fill in (gitignored)
+alias ca-snapshot='bash ~/RuleManager/scripts/snapshot.sh'
+ca-snapshot                                            # rebuild local copy any time
+```
+
+Then point `[connection]` at the local Docker (`host="localhost"`, the DB name
+you restored into, `sslmode="disable"`) and run `uv run audit.py`. The local
+Postgres major version must be >= the source's.
+
 ## Notes / current limits
 
 - Missing attributes follow **SQL-NULL semantics**: any comparison on an absent

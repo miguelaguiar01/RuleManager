@@ -12,3 +12,7 @@ __pycache__/
 
 # Data-audit: exports contain real corporate-action data
 exports/
+
+# Snapshot config holds real hostnames/credentials
+scripts/*.env
+!scripts/*.env.example
