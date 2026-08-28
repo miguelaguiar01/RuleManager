@@ -75,6 +75,17 @@ def _realized_section(realized_by_source: Dict[str, List[Dict]]) -> str:
     return "".join(blocks)
 
 
+def _conformance_causes_section(report: Optional[Dict]) -> str:
+    if not report or not report.get("causes"):
+        return '<p class="muted">No conformance failures.</p>'
+    rows = []
+    for c in report["causes"]:
+        condition = " AND ".join(c["conditions"])
+        samples = ", ".join(f'{s["value"]}×{s["count"]}' for s in c["sample_actuals"])
+        rows.append([c["assigned"], condition, c["count"], samples])
+    return _table(["Assigned", "Violated condition", "Records", "Sample actual values"], rows)
+
+
 def _integrity_section(report: Optional[Dict]) -> str:
     if not report:
         return '<p class="muted">Run with <code>--source both</code> to compare the MV against the attribute tables.</p>'
@@ -112,7 +123,9 @@ th { background: #8881; } .muted { color: #999; } code { background: #8882; padd
 
 def render_html(meta: Dict, summaries: List[AuditSummary],
                 realized_by_source: Dict[str, List[Dict]],
-                integrity_report: Optional[Dict]) -> str:
+                integrity_report: Optional[Dict],
+                conformance_causes: Optional[Dict[str, Dict]] = None) -> str:
+    conformance_causes = conformance_causes or {}
     parts = [
         f"<h1>Corporate-action rule audit — {_esc(meta.get('provider', ''))}</h1>",
         f'<div class="meta">Generated {_esc(meta.get("generated_at", ""))} · '
@@ -137,8 +150,12 @@ def render_html(meta: Dict, summaries: List[AuditSummary],
         parts.append('<p class="desc">CAs matching no Swift code. Full list in the accompanying CSV.</p>')
         parts.append(_examples_table(summary.unmatched, ["ca_id", "assigned code"], ["ca_id", "assigned"]))
 
+        parts.append("<h2>Conformance failures by cause</h2>")
+        parts.append('<p class="desc">CAs whose assigned code they do not actually match, grouped by the exact rule condition they violate — each record counted once, so this turns the raw count into a short list of root causes. Full per-record reasons in the CSV.</p>')
+        parts.append(_conformance_causes_section(conformance_causes.get(summary.source)))
+
         parts.append("<h2>Conformance issues (sample)</h2>")
-        parts.append('<p class="desc">CAs whose assigned code they do not actually match (stale rules, manual overrides, or engine-vs-validator differences). Full list in the CSV.</p>')
+        parts.append('<p class="desc">A sample of the individual records behind the causes above.</p>')
         parts.append(_examples_table(summary.conformance, ["ca_id", "assigned code", "actually matches"], ["ca_id", "assigned", "matches"]))
 
     parts.append("<h2>Flagged overlaps that actually collided</h2>")

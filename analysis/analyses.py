@@ -21,6 +21,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import rule_semantics as sem
 
+from . import matcher
 from .matcher import matching_codes
 from .records import CARecord
 
@@ -155,6 +156,75 @@ def iter_conformance(evaluated: List[EvaluatedRecord], rules: Dict[str, Dict]):
         if ev.assigned_code and ev.assigned_code in rules
         and ev.assigned_code not in ev.matched_codes
     )
+
+
+def conformance_records(records: Iterable[CARecord], rules: Dict[str, Dict]):
+    """Yield (record, reasons) for records that don't match their assigned code.
+    `reasons` is the list of violated conditions (from matcher.explain_nonmatch)."""
+    for rec in records:
+        code = rec.assigned_code
+        if not code or code not in rules:
+            continue
+        filters = rules[code].get("filters")
+        if not (isinstance(filters, list) and filters):
+            continue
+        block = filters[0]
+        if matcher.record_matches(rec.fields, block):
+            continue
+        yield rec, matcher.explain_nonmatch(rec.fields, block)
+
+
+def iter_conformance_reasons(records: Iterable[CARecord], rules: Dict[str, Dict]):
+    """One row per (record, violated condition) — for the full CSV."""
+    for rec, reasons in conformance_records(records, rules):
+        if not reasons:
+            yield {"ca_id": rec.ca_id, "assigned_code": rec.assigned_code,
+                   "column": "", "operator": "", "expected": "", "actual": ""}
+            continue
+        for r in reasons:
+            expected = r["column2"] if r["kind"] == "comparison" else matcher._fmt_value(r["expected"])
+            yield {
+                "ca_id": rec.ca_id,
+                "assigned_code": rec.assigned_code,
+                "column": r["column"],
+                "operator": r["operator"],
+                "expected": expected,
+                "actual": matcher.reason_actual(r),
+            }
+
+
+def conformance_by_cause(records: Iterable[CARecord], rules: Dict[str, Dict],
+                         *, examples: int = 5) -> Dict:
+    """Group conformance failures by (assigned code + violated conditions), so
+    hundreds of failures collapse into a few root causes. Each record counts
+    once, so the bucket counts sum to the total."""
+    buckets: Dict = {}
+    total = 0
+    for rec, reasons in conformance_records(records, rules):
+        total += 1
+        if reasons:
+            key = (rec.assigned_code, tuple(sorted(matcher.condition_key(r) for r in reasons)))
+            labels = [matcher.condition_label(r) for r in reasons]
+            primary_actual = matcher.reason_actual(reasons[0])
+        else:
+            key = (rec.assigned_code, ("<unknown>",))
+            labels = ["<no explanation available>"]
+            primary_actual = ""
+        b = buckets.get(key)
+        if b is None:
+            b = buckets[key] = {"assigned": rec.assigned_code, "conditions": labels,
+                                "count": 0, "actuals": Counter()}
+        b["count"] += 1
+        if primary_actual:
+            b["actuals"][primary_actual] += 1
+
+    causes = [
+        {"assigned": b["assigned"], "conditions": b["conditions"], "count": b["count"],
+         "sample_actuals": [{"value": v, "count": c} for v, c in b["actuals"].most_common(examples)]}
+        for b in buckets.values()
+    ]
+    causes.sort(key=lambda c: -c["count"])
+    return {"total": total, "causes": causes}
 
 
 def iter_integrity_mismatches(eav_records: Dict[Any, CARecord],

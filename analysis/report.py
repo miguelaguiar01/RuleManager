@@ -69,6 +69,24 @@ def render_realized(console: Console, realized: List[Dict]) -> None:
     console.print(t)
 
 
+def render_conformance_causes(console: Console, report: Dict, *, top: int = 20) -> None:
+    causes = report.get("causes", [])
+    if not causes:
+        return
+    console.print(f"\n[bold red]Conformance failures by cause[/bold red] "
+                  f"[dim]({report.get('total', 0)} records)[/dim]")
+    t = Table(box=box.SIMPLE)
+    t.add_column("Assigned", style="cyan")
+    t.add_column("Violated condition", style="yellow")
+    t.add_column("Records", justify="right", style="red")
+    t.add_column("Sample actuals", style="dim")
+    for c in causes[:top]:
+        condition = " AND ".join(c["conditions"])
+        samples = ", ".join(f'{s["value"]}×{s["count"]}' for s in c["sample_actuals"])
+        t.add_row(c["assigned"], condition, str(c["count"]), samples)
+    console.print(t)
+
+
 def render_integrity(console: Console, report: Dict) -> None:
     console.print("\n[bold yellow]MV vs EAV integrity:[/bold yellow]")
     t = Table(box=box.SIMPLE)
@@ -81,10 +99,12 @@ def render_integrity(console: Console, report: Dict) -> None:
 
 
 def build_payload(summaries: List[AuditSummary], realized_by_source: Dict[str, List[Dict]],
-                  integrity_report: Optional[Dict], *, counts_only: bool = False) -> Dict:
+                  integrity_report: Optional[Dict], *, counts_only: bool = False,
+                  conformance_causes: Optional[Dict[str, Dict]] = None) -> Dict:
     payload = {
         "summaries": [s.to_dict(counts_only=counts_only) for s in summaries],
         "realized_overlaps": realized_by_source,
+        "conformance_causes": conformance_causes or {},
         "integrity": integrity_report,
     }
     return payload
@@ -139,3 +159,13 @@ def write_csv_bundle(directory, prefix: str, evaluated: List, rules: Dict,
             ([m["ca_id"], m["column"], m["eav"], m["mv"]] for m in integrity_rows),
         ))
     return written
+
+
+def write_conformance_reasons_csv(directory, prefix: str, records, rules: Dict):
+    """Full per-record conformance reasons (one row per violated condition)."""
+    path = Path(directory) / f"{prefix}_conformance_reasons.csv"
+    rows = (
+        [d["ca_id"], d["assigned_code"], d["column"], d["operator"], d["expected"], d["actual"]]
+        for d in _an.iter_conformance_reasons(records, rules)
+    )
+    return _write_csv(path, ["ca_id", "assigned_code", "column", "operator", "expected", "actual"], rows)

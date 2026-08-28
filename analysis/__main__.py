@@ -106,6 +106,7 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
                   f"[dim]({rules_path})[/dim]")
 
     summaries, realized_by_source, eval_by_source = [], {}, {}
+    records_by_source, causes_by_source = {}, {}
     eav_records = mv_records = None
     integrity_report = None
 
@@ -117,6 +118,9 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
         summaries.append(summary)
         realized_by_source["eav"] = realized
         eval_by_source["eav"] = evaluated
+        records_by_source["eav"] = eav_records
+        causes_by_source["eav"] = analyses.conformance_by_cause(eav_records.values(), rules)
+        report.render_conformance_causes(console, causes_by_source["eav"])
 
     if args.source in ("mv", "both"):
         mv_rows = _load(console, "fetch materialized view", lambda: db.fetch_mv(conn, schema, columns))
@@ -125,6 +129,9 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
         summaries.append(summary)
         realized_by_source["mv"] = realized
         eval_by_source["mv"] = evaluated
+        records_by_source["mv"] = mv_records
+        causes_by_source["mv"] = analyses.conformance_by_cause(mv_records.values(), rules)
+        report.render_conformance_causes(console, causes_by_source["mv"])
 
     if args.source == "both" and eav_records is not None and mv_records is not None:
         integrity_report = analyses.integrity(eav_records, mv_records, columns)
@@ -133,7 +140,8 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
     if args.export:
         path = export_path(args.export, provider, multi)
         payload = report.build_payload(summaries, realized_by_source, integrity_report,
-                                       counts_only=args.counts_only)
+                                       counts_only=args.counts_only,
+                                       conformance_causes=causes_by_source)
         report.export_json(path, payload)
         console.print(f"[green]✓ Wrote {path}[/green]")
 
@@ -149,7 +157,8 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
         out = Path(args.report)
         out.mkdir(parents=True, exist_ok=True)
 
-        html = report_html.render_html(meta, summaries, realized_by_source, integrity_report)
+        html = report_html.render_html(meta, summaries, realized_by_source, integrity_report,
+                                       conformance_causes=causes_by_source)
         (out / f"{provider}_audit.html").write_text(html)
 
         for source, evaluated in eval_by_source.items():
@@ -157,9 +166,12 @@ def _run_provider(console: Console, conn, config: Dict, provider: str, args, mul
             if source == "eav" and eav_records is not None and mv_records is not None:
                 integ_rows = analyses.iter_integrity_mismatches(eav_records, mv_records, columns)
             report.write_csv_bundle(out, f"{provider}_{source}", evaluated, rules, integ_rows)
+            report.write_conformance_reasons_csv(out, f"{provider}_{source}",
+                                                 records_by_source[source].values(), rules)
 
         report.export_json(out / f"{provider}_audit.json",
-                           report.build_payload(summaries, realized_by_source, integrity_report))
+                           report.build_payload(summaries, realized_by_source, integrity_report,
+                                                conformance_causes=causes_by_source))
         console.print(f"[green]✓ Wrote BA report bundle to {out}/{provider}_audit.html (+ CSVs)[/green]")
 
 

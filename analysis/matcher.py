@@ -35,6 +35,110 @@ def _eval_node(record: Dict[str, Any], node: Dict) -> bool:
     return sem.evaluate_leaf(actual, node.get("operator"), node.get("value"))
 
 
+# --- explaining WHY a record fails a rule ----------------------------------
+
+def explain_nonmatch(record: Dict[str, Any], filters: Dict) -> list:
+    """Return the leaf/comparison conditions a record violates in `filters`.
+
+    Empty list means the record actually matches. For OR blocks it returns the
+    nearest-miss branch (fewest violated conditions); for AND blocks it returns
+    every unmet condition. Each reason is a JSON-friendly dict.
+    """
+    ok, reasons = _explain_block(record, filters)
+    return [] if ok else reasons
+
+
+def _explain_block(record, block):
+    logic = block.get("logic", "or")
+    conditions = block.get("conditions", [])
+    if logic == "and":
+        reasons = []
+        for node in conditions:
+            ok, sub = _explain_node(record, node)
+            if not ok:
+                reasons.extend(sub)
+        return (not reasons), reasons
+    # OR (and the default): matches if any branch matches; else nearest miss.
+    if not conditions:
+        return False, []
+    best = None
+    for node in conditions:
+        ok, sub = _explain_node(record, node)
+        if ok:
+            return True, []
+        if best is None or len(sub) < len(best):
+            best = sub
+    return False, (best or [])
+
+
+def _explain_node(record, node):
+    if "logic" in node:
+        return _explain_block(record, node)
+    if "comparison" in node:
+        left = record.get(node.get("column1"), MISSING)
+        right = record.get(node.get("column2"), MISSING)
+        if sem.evaluate_comparison(left, node.get("operator"), right):
+            return True, []
+        return False, [{
+            "kind": "comparison",
+            "column": node.get("column1"),
+            "operator": node.get("operator"),
+            "column2": node.get("column2"),
+            "actual": None if left is MISSING else left,
+            "missing": left is MISSING,
+            "actual2": None if right is MISSING else right,
+            "missing2": right is MISSING,
+        }]
+    actual = record.get(node.get("column"), MISSING)
+    if sem.evaluate_leaf(actual, node.get("operator"), node.get("value")):
+        return True, []
+    return False, [{
+        "kind": "leaf",
+        "column": node.get("column"),
+        "operator": node.get("operator"),
+        "expected": node.get("value"),
+        "actual": None if actual is MISSING else actual,
+        "missing": actual is MISSING,
+    }]
+
+
+def _fmt_value(value) -> str:
+    if isinstance(value, list):
+        return "[" + ", ".join(str(v) for v in value) + "]"
+    return str(value)
+
+
+def condition_label(reason: Dict) -> str:
+    """Human label for a violated condition, WITHOUT the actual value (used to
+    group failures by cause)."""
+    if reason["kind"] == "comparison":
+        return f'{reason["column"]} {reason["operator"]} {reason["column2"]}'
+    return f'{reason["column"]} {reason["operator"]} {_fmt_value(reason["expected"])}'
+
+
+def condition_key(reason: Dict):
+    """Stable grouping key for a violated condition (order-insensitive lists)."""
+    if reason["kind"] == "comparison":
+        return (reason["column"], reason["operator"], reason["column2"])
+    expected = reason["expected"]
+    exp_repr = repr(sorted(map(str, expected))) if isinstance(expected, list) else repr(expected)
+    return (reason["column"], reason["operator"], exp_repr)
+
+
+def reason_actual(reason: Dict) -> str:
+    """The record's actual value(s) for a reason, as a display string."""
+    left = "<missing>" if reason["missing"] else _fmt_value(reason["actual"])
+    if reason["kind"] == "comparison":
+        right = "<missing>" if reason.get("missing2") else _fmt_value(reason.get("actual2"))
+        return f"{left} vs {right}"
+    return left
+
+
+def format_reason(reason: Dict) -> str:
+    """Full one-line reason: condition + actual value(s)."""
+    return f"{condition_label(reason)}  (actual: {reason_actual(reason)})"
+
+
 def matching_codes(record: Dict[str, Any], rules: Dict[str, Dict]) -> list:
     """All Swift codes whose rule this record satisfies (sorted, stable)."""
     matched = []
